@@ -1,5 +1,5 @@
 """
-app/handlers/start.py - Start Command, Admin Credit Management & Link Handler for aiogram 3.x
+app/handlers/start.py - Start Command, Admin Credit Management, TrueMoney Angpao & Link Handler for aiogram 3.x
 """
 
 import os
@@ -8,8 +8,9 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, FSInputFile
 from aiogram.utils.markdown import html_decoration as hd
 
-from app.telegram.auth import check_user_session, get_user_credits, add_user_credits, is_admin
+from app.telegram.auth import check_user_session, get_user_credits, add_user_credits, is_admin, update_user_profile
 from app.telegram.media import download_media_from_link
+from app.services.truemoney import redeem_truemoney_angpao
 
 router = Router()
 
@@ -48,6 +49,9 @@ async def command_start_handler(message: Message) -> None:
     raw_user_name = message.from_user.full_name if message.from_user else "User"
     user_name = hd.quote(raw_user_name)
     
+    tg_username = message.from_user.username if message.from_user else ""
+    update_user_profile(user_id, username=tg_username, first_name=raw_user_name)
+
     api_id, api_hash = get_api_credentials()
     webapp_url = get_webapp_url()
 
@@ -65,11 +69,11 @@ async def command_start_handler(message: Message) -> None:
             f"📱 <b>Telegram ID:</b> <code>{user_id}</code>"
             f"{admin_badge}"
             f"🎟️ <b>โควตาดาวน์โหลดคงเหลือ:</b> <code>{credits} ครั้ง</code>\n\n"
-            "✨ ระบบพร้อมใช้งานแล้ว! คุณสามารถส่ง Telegram Message Link มาในแชทนี้เพื่อดาวน์โหลด Media ได้ทันที"
+            "✨ ส่ง Telegram Link เพื่อดาวน์โหลดสื่อ หรือส่ง **ลิงก์ซองอั่งเปา TrueMoney** มาในแชทนี้เพื่อเติมโควตาอัตโนมัติได้ทันที!"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🚀 เปิด Telegram MiniApp", web_app=WebAppInfo(url=webapp_url))],
-            [InlineKeyboardButton(text="🔗 วิธีส่ง Telegram Link", callback_data="send_link_info")],
+            [InlineKeyboardButton(text="🧧 วิธีเติมอั่งเปา TrueMoney", callback_data="topup_info")],
             [InlineKeyboardButton(text="🔓 Logout", callback_data="logout")]
         ])
     else:
@@ -94,7 +98,7 @@ async def check_credits_handler(message: Message):
     credits = get_user_credits(user_id)
     await message.answer(
         f"🎟️ <b>โควตาดาวน์โหลดคงเหลือของคุณ:</b> <code>{credits} ครั้ง</code>\n\n"
-        "หากโควตาหมด กรุณาติดต่อแอดมินเพื่อเติมเครดิตครับ",
+        "🧧 <b>ต้องการเติมโควตาเพิ่ม?</b> สามารถสร้างซองอั่งเปา TrueMoney Wallet แล้วส่งลิงก์เข้ามาในแชทนี้เพื่อเติมเงินอัตโนมัติได้ทันที!",
         parse_mode="HTML"
     )
 
@@ -135,6 +139,37 @@ async def add_credits_handler(message: Message):
         await message.answer("❌ กรุณาระบุ User ID และ จำนวนครั้งเป็นตัวเลข", parse_mode="HTML")
 
 
+@router.message(F.text.contains("gift.truemoney.com"))
+async def truemoney_angpao_handler(message: Message):
+    """
+    Automated TrueMoney Wallet Angpao Voucher Redemption Handler.
+    """
+    user_id = message.from_user.id
+    link = message.text.strip()
+    phone = os.getenv("TRUEMONEY_PHONE", "0800000000").strip()
+
+    status_msg = await message.answer("🔄 <b>กำลังตรวจสอบและรับซองอั่งเปา TrueMoney Wallet...</b>", parse_mode="HTML")
+
+    success, amount, error_msg = await redeem_truemoney_angpao(phone, link)
+
+    if success:
+        credits_to_add = int(amount)
+        if credits_to_add <= 0:
+            credits_to_add = 1
+
+        new_balance = add_user_credits(user_id, credits_to_add)
+        await status_msg.edit_text(
+            f"🎉 <b>เติมเงินสำเร็จเรียบร้อยแล้ว!</b>\n\n"
+            f"🧧 <b>ยอดซองอั่งเปา:</b> <code>{amount:.2f} บาท</code>\n"
+            f"➕ <b>โควตาที่ได้รับ:</b> <code>+{credits_to_add} ครั้ง</code>\n"
+            f"🎟️ <b>ยอดโควตาคงเหลือใหม่:</b> <code>{new_balance} ครั้ง</code>\n\n"
+            "ขอบคุณที่ใช้บริการครับ ✨",
+            parse_mode="HTML"
+        )
+    else:
+        await status_msg.edit_text(f"❌ <b>เติมซองอั่งเปาไม่สำเร็จ:</b> {error_msg}", parse_mode="HTML")
+
+
 @router.message(F.text.contains("t.me/"))
 async def link_download_handler(message: Message):
     """
@@ -144,11 +179,15 @@ async def link_download_handler(message: Message):
     link = message.text.strip()
     api_id, api_hash = get_api_credentials()
 
+    tg_username = message.from_user.username if message.from_user else ""
+    raw_user_name = message.from_user.full_name if message.from_user else ""
+    update_user_profile(user_id, username=tg_username, first_name=raw_user_name)
+
     credits = get_user_credits(user_id)
     if credits <= 0:
         await message.answer(
             "❌ <b>โควตาดาวน์โหลดของคุณหมดแล้ว! (0 ครั้ง)</b>\n\n"
-            "กรุณาติดต่อแอดมินเพื่อเติมเครดิตก่อนดาวน์โหลดเพิ่มเติมครับ",
+            "🧧 สามารถสร้างซองอั่งเปา TrueMoney แล้วส่งลิงก์มาในแชทนี้เพื่อเติมโควตาอัตโนมัติได้ทันทีครับ",
             parse_mode="HTML"
         )
         return

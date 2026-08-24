@@ -1,6 +1,6 @@
 """
 app/web/server.py - Telegram MiniApp & FastAPI Web Application
-Telegram Downloader MiniApp UI, REST API & Webhook Service (100% Vercel Serverless Compatible & Admin Security)
+Telegram Downloader MiniApp UI, REST API, TrueMoney Angpao Topup & Webhook Service
 """
 
 import os
@@ -25,9 +25,11 @@ from app.telegram.auth import (
     get_user_credits,
     add_user_credits,
     is_admin,
-    get_all_users_list
+    get_all_users_list,
+    update_user_profile
 )
 from app.telegram.media import download_media_from_link
+from app.services.truemoney import redeem_truemoney_angpao
 from app.handlers import start_router, login_router
 
 app = FastAPI(
@@ -124,6 +126,11 @@ class AdminAddCreditsRequest(BaseModel):
     amount: int
 
 
+class TrueMoneyTopupRequest(BaseModel):
+    user_id: int
+    link: str
+
+
 @app.post("/api/webhook")
 async def telegram_webhook(request: Request):
     """
@@ -158,6 +165,28 @@ async def setup_webhook():
         return {"success": False, "error": str(e)}
 
 
+@app.post("/api/topup/truemoney")
+async def api_topup_truemoney(req: TrueMoneyTopupRequest):
+    phone = os.getenv("TRUEMONEY_PHONE", "0834274788").strip()
+    success, amount, error_msg = await redeem_truemoney_angpao(phone, req.link)
+
+    if success:
+        credits_to_add = int(amount)
+        if credits_to_add <= 0:
+            credits_to_add = 1
+
+        new_balance = add_user_credits(req.user_id, credits_to_add)
+        return {
+            "success": True,
+            "message": f"เติมเงินสำเร็จ! ได้รับโควตา +{credits_to_add} ครั้ง (ยอดซอง {amount:.2f} บาท)",
+            "amount_baht": amount,
+            "credits_added": credits_to_add,
+            "new_balance": new_balance
+        }
+    else:
+        raise HTTPException(status_code=400, detail=error_msg or "เติมซองอั่งเปาไม่สำเร็จ")
+
+
 @app.get("/api/admin/users")
 async def admin_get_users(admin_id: int):
     if not is_admin(admin_id):
@@ -173,7 +202,7 @@ async def admin_add_credits(req: AdminAddCreditsRequest):
     new_credits = add_user_credits(req.target_user_id, req.amount)
     return {
         "success": True,
-        "message": f"เติมเครดิตให้ {req.target_user_id} จำนวน +{req.amount} ครั้งเรียบร้อย",
+        "message": f"เติมเครดิตให้ User {req.target_user_id} จำนวน +{req.amount} ครั้งเรียบร้อย",
         "target_user_id": req.target_user_id,
         "new_credits": new_credits
     }
@@ -289,199 +318,344 @@ MINIAPP_HTML = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Telegram Downloader MiniApp</title>
+    <title>Telegram Downloader</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root {
-            --bg-color: #0f172a;
-            --card-bg: rgba(30, 41, 59, 0.75);
-            --text-color: #f8fafc;
-            --accent-color: #6366f1;
-            --accent-gradient: linear-gradient(135deg, #6366f1, #a855f7);
-            --border-color: rgba(255, 255, 255, 0.12);
+            --tg-bg: #0e1621;
+            --tg-card: #17212b;
+            --tg-card-hover: #202b36;
+            --tg-input: #242f3d;
+            --tg-blue: #3390ec;
+            --tg-blue-hover: #2b82d9;
+            --tg-text: #ffffff;
+            --tg-subtext: #7f91a4;
+            --tg-border: rgba(255, 255, 255, 0.07);
+            --tg-green: #40b76e;
+            --tg-red: #e53935;
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; -webkit-tap-highlight-color: transparent; }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-tap-highlight-color: transparent; }
+
         body {
-            background: var(--bg-color);
-            color: var(--text-color);
+            background-color: var(--tg-bg);
+            color: var(--tg-text);
             min-height: 100vh;
-            padding: 16px;
+            padding: 16px 12px 32px 12px;
             display: flex;
             flex-direction: column;
         }
+
         .container {
-            max-width: 480px;
+            max-width: 440px;
             margin: 0 auto;
             width: 100%;
-            flex: 1;
-            display: flex;
-            flex-direction: column;
         }
-        .nav-tabs {
-            display: flex;
-            background: rgba(15, 23, 42, 0.8);
+
+        /* Profile Header */
+        .profile-card {
+            background: var(--tg-card);
+            border: 1px solid var(--tg-border);
             border-radius: 16px;
-            padding: 4px;
-            border: 1px solid var(--border-color);
-            margin-bottom: 20px;
+            padding: 14px 16px;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
-        .tab-btn {
-            flex: 1;
-            padding: 10px 6px;
-            border: none;
-            background: transparent;
-            color: #94a3b8;
-            font-size: 12px;
-            font-weight: 600;
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all 0.2s ease;
+
+        .profile-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .avatar {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: var(--tg-blue);
+            color: white;
+            font-weight: 700;
+            font-size: 15px;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 4px;
         }
-        .tab-btn.active {
-            background: var(--accent-gradient);
-            color: white;
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+
+        .user-name {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--tg-text);
         }
-        .glass-card {
-            background: var(--card-bg);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid var(--border-color);
+
+        .user-id {
+            font-size: 12px;
+            color: var(--tg-subtext);
+            margin-top: 2px;
+        }
+
+        .credit-badge {
+            background: rgba(51, 144, 236, 0.12);
+            color: var(--tg-blue);
+            border: 1px solid rgba(51, 144, 236, 0.25);
+            padding: 6px 12px;
             border-radius: 20px;
-            padding: 24px 20px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Segmented Nav Bar */
+        .nav-segmented {
+            background: var(--tg-card);
+            border: 1px solid var(--tg-border);
+            border-radius: 12px;
+            padding: 3px;
+            display: flex;
             margin-bottom: 16px;
         }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; animation: fadeIn 0.3s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-        
-        .header-title { font-size: 20px; font-weight: 700; color: white; margin-bottom: 4px; }
-        .header-sub { font-size: 13px; color: #94a3b8; margin-bottom: 20px; }
 
-        .form-group { margin-bottom: 16px; }
-        label { display: block; font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-        input {
-            width: 100%; padding: 13px 14px;
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid var(--border-color);
-            border-radius: 12px; color: white; font-size: 14px; outline: none;
+        .nav-btn {
+            flex: 1;
+            padding: 9px 2px;
+            border: none;
+            background: transparent;
+            color: var(--tg-subtext);
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: 9px;
+            cursor: pointer;
             transition: all 0.2s ease;
+            text-align: center;
         }
-        input:focus { border-color: #818cf8; box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.25); }
-        
-        .btn {
-            width: 100%; padding: 14px;
-            background: var(--accent-gradient);
-            border: none; border-radius: 12px; color: white; font-size: 14px; font-weight: 600;
-            cursor: pointer; transition: all 0.2s ease;
-            box-shadow: 0 8px 16px rgba(99, 102, 241, 0.35);
-            display: flex; align-items: center; justify-content: center; gap: 8px;
+
+        .nav-btn.active {
+            background: var(--tg-blue);
+            color: white;
         }
-        .btn:active { transform: scale(0.98); }
+
+        /* Card Sections */
+        .section-card {
+            background: var(--tg-card);
+            border: 1px solid var(--tg-border);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--tg-text);
+            margin-bottom: 4px;
+        }
+
+        .section-desc {
+            font-size: 13px;
+            color: var(--tg-subtext);
+            margin-bottom: 18px;
+            line-height: 1.4;
+        }
+
+        /* Inputs & Labels */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--tg-subtext);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 14px;
+            background: var(--tg-input);
+            border: 1px solid var(--tg-border);
+            border-radius: 10px;
+            color: white;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s ease;
+        }
+
+        input:focus {
+            border-color: var(--tg-blue);
+        }
+
+        input::placeholder {
+            color: #536374;
+        }
+
+        /* Buttons */
+        .btn-primary {
+            width: 100%;
+            padding: 13px;
+            background: var(--tg-blue);
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-primary:hover {
+            background: var(--tg-blue-hover);
+        }
+
+        .btn-primary:active {
+            opacity: 0.9;
+        }
+
         .btn-secondary {
-            background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-color);
-            box-shadow: none; color: #cbd5e1; margin-top: 10px;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--tg-text);
+            margin-top: 8px;
         }
+
         .btn-danger {
-            background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4);
-            color: #fca5a5; box-shadow: none; margin-top: 10px;
+            background: rgba(229, 57, 53, 0.15);
+            color: #ef5350;
+            margin-top: 10px;
         }
+
         .btn-sm {
-            padding: 6px 12px; font-size: 12px; border-radius: 8px; width: auto; box-shadow: none;
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 8px;
+            width: auto;
         }
 
-        .alert {
-            padding: 12px 14px; border-radius: 12px; font-size: 13px; margin-bottom: 16px; display: none;
-            word-break: break-word;
+        /* Instruction Box */
+        .info-box {
+            background: rgba(51, 144, 236, 0.08);
+            border: 1px solid rgba(51, 144, 236, 0.2);
+            border-radius: 10px;
+            padding: 14px;
+            margin-bottom: 16px;
+            font-size: 12px;
+            color: #b0c4de;
+            line-height: 1.5;
         }
-        .alert-danger { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; }
-        .alert-success { background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.3); color: #86efac; }
 
-        .user-card {
-            text-align: center; background: rgba(15, 23, 42, 0.5); padding: 18px;
-            border-radius: 16px; border: 1px solid var(--border-color); margin-bottom: 16px;
+        /* Alert */
+        .alert-bar {
+            padding: 12px 14px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 14px;
+            display: none;
         }
-        .avatar {
-            width: 64px; height: 64px; border-radius: 50%;
-            background: linear-gradient(135deg, #10b981, #059669);
-            color: white; font-size: 24px; font-weight: 700;
-            display: flex; align-items: center; justify-content: center; margin: 0 auto 10px auto;
-            box-shadow: 0 0 16px rgba(16, 185, 129, 0.4);
-        }
-        .status-badge {
-            display: inline-block; padding: 4px 10px; border-radius: 20px;
-            font-size: 11px; font-weight: 600; background: rgba(34, 197, 94, 0.2);
-            color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); margin-top: 6px;
-        }
-        
-        .step-box { display: none; }
-        .step-box.active { display: block; }
 
-        .file-item {
-            display: flex; align-items: center; justify-content: space-between;
-            background: rgba(15, 23, 42, 0.5); padding: 12px 14px;
-            border-radius: 12px; border: 1px solid var(--border-color); margin-bottom: 8px;
+        .alert-error {
+            background: rgba(229, 57, 53, 0.15);
+            border: 1px solid rgba(229, 57, 53, 0.3);
+            color: #ef5350;
         }
-        .file-name { font-size: 13px; color: white; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
-        .file-size { font-size: 11px; color: #94a3b8; }
 
-        .user-row {
-            display: flex; align-items: center; justify-content: space-between;
-            background: rgba(15, 23, 42, 0.5); padding: 12px; border-radius: 12px;
-            border: 1px solid var(--border-color); margin-bottom: 8px; font-size: 13px;
+        .alert-success {
+            background: rgba(64, 183, 110, 0.15);
+            border: 1px solid rgba(64, 183, 110, 0.3);
+            color: #81c784;
         }
+
+        /* User & File List Items */
+        .item-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--tg-input);
+            border: 1px solid var(--tg-border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
+        }
+
+        .item-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--tg-text);
+        }
+
+        .item-sub {
+            font-size: 11px;
+            color: var(--tg-subtext);
+            margin-top: 2px;
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
 
         .spinner {
-            width: 18px; height: 18px; border: 2.5px solid rgba(255,255,255,0.3);
-            border-radius: 50%; border-top-color: white; animation: spin 0.8s linear infinite; display: none;
+            width: 16px; height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.6s linear infinite;
+            display: none;
         }
+
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Navigation Tabs -->
-        <div class="nav-tabs">
-            <button class="tab-btn active" onclick="switchTab('auth', event)">
-                🔐 <span>Account</span>
-            </button>
-            <button class="tab-btn" onclick="switchTab('download', event)">
-                📥 <span>Downloader</span>
-            </button>
-            <button class="tab-btn" onclick="switchTab('files', event)">
-                📁 <span>Files</span>
-            </button>
-            <button class="tab-btn" id="admin-tab-btn" style="display: none;" onclick="switchTab('admin', event)">
-                👑 <span>Admin</span>
-            </button>
+        <!-- Profile Header Bar -->
+        <div class="profile-card">
+            <div class="profile-left">
+                <div class="avatar" id="hdr-avatar">TG</div>
+                <div>
+                    <div class="user-name" id="hdr-name">Telegram Account</div>
+                    <div class="user-id" id="hdr-id">ID: 000000</div>
+                </div>
+            </div>
+            <div class="credit-badge" id="hdr-credits">
+                🎟️ <span>5 ครั้ง</span>
+            </div>
         </div>
 
-        <div id="alert-box" class="alert"></div>
+        <!-- Segmented Control Nav Bar -->
+        <div class="nav-segmented">
+            <button class="nav-btn active" onclick="switchTab('auth', event)">Account</button>
+            <button class="nav-btn" onclick="switchTab('download', event)">Downloader</button>
+            <button class="nav-btn" onclick="switchTab('topup', event)">เติมเงิน</button>
+            <button class="nav-btn" onclick="switchTab('files', event)">Files</button>
+            <button class="nav-btn" id="admin-tab-btn" style="display: none;" onclick="switchTab('admin', event)">Admin</button>
+        </div>
 
-        <!-- TAB 1: AUTHENTICATION -->
+        <div id="alert-box" class="alert-bar"></div>
+
+        <!-- TAB 1: ACCOUNT -->
         <div id="tab-auth" class="tab-content active">
-            <div class="glass-card">
+            <div class="section-card">
                 <!-- Step 1: Phone -->
                 <div id="auth-step-1" class="step-box active">
-                    <h2 class="header-title">🔐 User Account Login</h2>
-                    <p class="header-sub">เข้าสู่ระบบเพื่อใช้ Telegram Session ของคุณดาวน์โหลด Media</p>
+                    <h2 class="section-title">เข้าสู่ระบบ Telegram Account</h2>
+                    <p class="section-desc">เชื่อมต่อบัญชี Telegram เพื่อใช้ดาวน์โหลดรูปภาพและวิดีโอ</p>
                     <div class="form-group">
-                        <label>Telegram User ID</label>
-                        <input type="text" id="user-id-input" placeholder="กำลังดึง Telegram ID...">
+                        <label class="form-label">Telegram User ID</label>
+                        <input type="text" id="user-id-input" placeholder="กำลังโหลด ID...">
                     </div>
                     <div class="form-group">
-                        <label>เบอร์โทรศัพท์ (พร้อม +)</label>
+                        <label class="form-label">เบอร์โทรศัพท์ (พร้อม +)</label>
                         <input type="text" id="phone-input" placeholder="+66812345678">
                     </div>
-                    <button class="btn" onclick="handleSendOtp()">
+                    <button class="btn-primary" onclick="handleSendOtp()">
                         <span class="spinner" id="sp-1"></span>
                         <span>ส่งรหัส OTP</span>
                     </button>
@@ -489,44 +663,45 @@ MINIAPP_HTML = """<!DOCTYPE html>
 
                 <!-- Step 2: OTP -->
                 <div id="auth-step-2" class="step-box">
-                    <h2 class="header-title">📲 ยืนยันรหัส OTP</h2>
-                    <p class="header-sub">กรอกรหัส OTP ที่ได้รับจากแชท Telegram ของคุณ</p>
+                    <h2 class="section-title">ยืนยันรหัส OTP</h2>
+                    <p class="section-desc">กรอกรหัส OTP ที่ส่งไปยังแชท Telegram ของคุณ</p>
                     <div class="form-group">
-                        <label>รหัส OTP</label>
+                        <label class="form-label">รหัส OTP</label>
                         <input type="text" id="otp-input" placeholder="เช่น 12345">
                     </div>
-                    <button class="btn" onclick="handleVerifyOtp()">
+                    <button class="btn-primary" onclick="handleVerifyOtp()">
                         <span class="spinner" id="sp-2"></span>
                         <span>ยืนยันรหัส OTP</span>
                     </button>
-                    <button class="btn btn-secondary" onclick="showAuthStep(1)">ยกเลิก</button>
+                    <button class="btn-primary btn-secondary" onclick="showAuthStep(1)">ยกเลิก</button>
                 </div>
 
                 <!-- Step 3: 2FA -->
                 <div id="auth-step-3" class="step-box">
-                    <h2 class="header-title">🔐 Two-Step Verification</h2>
-                    <p class="header-sub">บัญชีของคุณมีการตั้งค่ารหัสผ่าน 2FA</p>
+                    <h2 class="section-title">Two-Step Verification</h2>
+                    <p class="section-desc">กรอกรหัสผ่าน 2FA ของบัญชี Telegram</p>
                     <div class="form-group">
-                        <label>2FA Password</label>
-                        <input type="password" id="pwd-input" placeholder="กรอกรหัสผ่าน 2FA">
+                        <label class="form-label">รหัสผ่าน 2FA</label>
+                        <input type="password" id="pwd-input" placeholder="กรอกรหัสผ่าน">
                     </div>
-                    <button class="btn" onclick="handleVerify2FA()">
+                    <button class="btn-primary" onclick="handleVerify2FA()">
                         <span class="spinner" id="sp-3"></span>
-                        <span>ยืนยันรหัสผ่าน 2FA</span>
+                        <span>ยืนยันรหัสผ่าน</span>
                     </button>
-                    <button class="btn btn-secondary" onclick="showAuthStep(1)">ยกเลิก</button>
+                    <button class="btn-primary btn-secondary" onclick="showAuthStep(1)">ยกเลิก</button>
                 </div>
 
                 <!-- Step 4: Dashboard -->
                 <div id="auth-step-4" class="step-box">
-                    <div class="user-card">
-                        <div class="avatar" id="dash-avatar">TG</div>
-                        <h2 style="font-size: 18px; color: white;" id="dash-name">@username</h2>
-                        <p style="font-size: 12px; color: #94a3b8; margin-top: 2px;" id="dash-id">ID: 000000</p>
-                        <p style="font-size: 13px; color: #818cf8; margin-top: 6px; font-weight: 600;" id="dash-credits">🎟️ โควตาคงเหลือ: 5 ครั้ง</p>
-                        <div class="status-badge">🟢 Telegram Account: Connected</div>
+                    <div style="text-align: center; padding: 10px 0 16px 0;">
+                        <div class="avatar" style="width: 56px; height: 56px; margin: 0 auto 10px auto; font-size: 20px;" id="dash-avatar">TG</div>
+                        <div style="font-size: 16px; font-weight: 600; color: white;" id="dash-name">@username</div>
+                        <div style="font-size: 12px; color: var(--tg-subtext); margin-top: 2px;" id="dash-id">ID: 000000</div>
+                        <div style="margin-top: 10px; display: inline-block; padding: 4px 10px; background: rgba(64,183,110,0.15); border: 1px solid rgba(64,183,110,0.3); border-radius: 20px; font-size: 12px; font-weight: 500; color: var(--tg-green);">
+                            🟢 เชื่อมต่อบัญชีสำเร็จแล้ว
+                        </div>
                     </div>
-                    <button class="btn btn-danger" onclick="handleLogout()">
+                    <button class="btn-primary btn-danger" onclick="handleLogout()">
                         <span class="spinner" id="sp-4"></span>
                         <span>ออกจากระบบ (Logout)</span>
                     </button>
@@ -536,55 +711,76 @@ MINIAPP_HTML = """<!DOCTYPE html>
 
         <!-- TAB 2: DOWNLOADER -->
         <div id="tab-download" class="tab-content">
-            <div class="glass-card">
-                <h2 class="header-title">📥 Download Telegram Media</h2>
-                <p class="header-sub">วางลิงก์ข้อความ Telegram เพื่อเริ่มดาวน์โหลดรูปภาพ/วิดีโอ/ไฟล์</p>
+            <div class="section-card">
+                <h2 class="section-title">ดาวน์โหลด Telegram Media</h2>
+                <p class="section-desc">วางลิงก์ข้อความ Telegram เพื่อเริ่มดาวน์โหลดไฟล์</p>
                 <div class="form-group">
-                    <label>Telegram Message Link</label>
+                    <label class="form-label">Telegram Message Link</label>
                     <input type="text" id="link-input" placeholder="https://t.me/c/123456789/100">
                 </div>
-                <button class="btn" onclick="handleStartDownload()">
+                <button class="btn-primary" onclick="handleStartDownload()">
                     <span class="spinner" id="sp-dl"></span>
                     <span>เริ่มดาวน์โหลด</span>
                 </button>
             </div>
         </div>
 
-        <!-- TAB 3: FILES -->
+        <!-- TAB 3: TOPUP -->
+        <div id="tab-topup" class="tab-content">
+            <div class="section-card">
+                <h2 class="section-title">เติมโควตาดาวน์โหลด (TrueMoney)</h2>
+                <p class="section-desc">เติมโควตาอัตโนมัติ 24 ชม. ผ่านซองอั่งเปา TrueMoney Wallet (1 บาท = 1 โควตา)</p>
+                
+                <div class="info-box">
+                    📌 <b>วิธีสร้างซองอั่งเปา:</b> เปิดแอป TrueMoney Wallet ➔ เลือก <b>ส่งซองอั่งเปา</b> ➔ ใส่ยอดเงิน ➔ กำหนดจำนวนคนรับ = <b>1 คน</b> ➔ คัดลอกลิงก์มาวางด้านล่าง
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">ลิงก์ซองอั่งเปา TrueMoney</label>
+                    <input type="text" id="angpao-link-input" placeholder="https://gift.truemoney.com/v2/verify/?v=...">
+                </div>
+                <button class="btn-primary" onclick="handleTrueMoneyTopup()">
+                    <span class="spinner" id="sp-tp"></span>
+                    <span>ยืนยันการเติมเงิน</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- TAB 4: FILES -->
         <div id="tab-files" class="tab-content">
-            <div class="glass-card">
-                <h2 class="header-title">📁 Downloaded Files</h2>
-                <p class="header-sub">รายการไฟล์ที่ดาวน์โหลดเสร็จสมบูรณ์ในระบบ</p>
+            <div class="section-card">
+                <h2 class="section-title">รายการไฟล์ที่ดาวน์โหลด</h2>
+                <p class="section-desc">ไฟล์ทั้งหมดที่ดาวน์โหลดสำเร็จในระบบ</p>
                 <div id="files-list">
-                    <p style="font-size: 13px; color: #94a3b8; text-align: center;">กำลังโหลดรายการไฟล์...</p>
+                    <p style="font-size: 13px; color: var(--tg-subtext); text-align: center;">กำลังโหลดรายการไฟล์...</p>
                 </div>
             </div>
         </div>
 
-        <!-- TAB 4: ADMIN DASHBOARD -->
+        <!-- TAB 5: ADMIN -->
         <div id="tab-admin" class="tab-content">
-            <div class="glass-card">
-                <h2 class="header-title">👑 Admin Control Panel</h2>
-                <p class="header-sub">จัดการโควตาดาวน์โหลดและเติมเครดิตให้ผู้ใช้ระบบ</p>
+            <div class="section-card">
+                <h2 class="section-title">Admin Control Panel</h2>
+                <p class="section-desc">จัดการโควตาดาวน์โหลดให้ผู้ใช้ในระบบ</p>
                 
-                <div style="background: rgba(15,23,42,0.6); padding: 14px; border-radius: 12px; margin-bottom: 16px; border: 1px solid var(--border-color);">
-                    <h3 style="font-size: 14px; color: white; margin-bottom: 8px;">➕ เติมโควตาดาวน์โหลดให้ลูกค้า</h3>
+                <div style="background: var(--tg-input); padding: 14px; border-radius: 12px; margin-bottom: 16px; border: 1px solid var(--tg-border);">
+                    <div style="font-size: 13px; font-weight: 600; color: white; margin-bottom: 10px;">➕ เติมโควตาให้ผู้ใช้</div>
                     <div class="form-group">
-                        <label>Telegram User ID ลูกค้า</label>
-                        <input type="text" id="admin-target-id" placeholder="ระบุ Telegram User ID เช่น 8314575937">
+                        <label class="form-label">Telegram User ID</label>
+                        <input type="text" id="admin-target-id" placeholder="เช่น 8314575937">
                     </div>
                     <div class="form-group">
-                        <label>จำนวนโควตาที่ต้องการเติม (ครั้ง)</label>
+                        <label class="form-label">จำนวนโควตา (ครั้ง)</label>
                         <input type="number" id="admin-amount" placeholder="เช่น 50">
                     </div>
-                    <button class="btn" onclick="handleAdminAddCredits()">
-                        <span>ยืนยันการเติมโควตา</span>
+                    <button class="btn-primary" onclick="handleAdminAddCredits()">
+                        <span>ยืนยันเติมโควตา</span>
                     </button>
                 </div>
 
-                <h3 style="font-size: 14px; color: white; margin-bottom: 8px;">👥 รายชื่อผู้ใช้และโควตาคงเหลือ</h3>
+                <div style="font-size: 13px; font-weight: 600; color: white; margin-bottom: 10px;">👥 รายชื่อผู้ใช้ทั้งหมด</div>
                 <div id="admin-users-list">
-                    <p style="font-size: 13px; color: #94a3b8; text-align: center;">กำลังโหลดรายชื่อผู้ใช้...</p>
+                    <p style="font-size: 13px; color: var(--tg-subtext); text-align: center;">กำลังโหลดรายชื่อผู้ใช้...</p>
                 </div>
             </div>
         </div>
@@ -609,7 +805,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
         }
 
         function switchTab(tabName, event) {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             
             if (event && event.currentTarget) {
@@ -623,7 +819,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
 
         function showAlert(msg, isError = true) {
             const box = document.getElementById('alert-box');
-            box.className = 'alert ' + (isError ? 'alert-danger' : 'alert-success');
+            box.className = 'alert-bar ' + (isError ? 'alert-error' : 'alert-success');
             box.innerText = msg;
             box.style.display = 'block';
         }
@@ -648,17 +844,52 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 const data = await res.json();
                 
                 if (data.is_admin) {
-                    document.getElementById('admin-tab-btn').style.display = 'flex';
+                    document.getElementById('admin-tab-btn').style.display = 'block';
                 }
+
+                document.getElementById('hdr-name').innerText = data.username || 'User Account';
+                document.getElementById('hdr-id').innerText = 'ID: ' + (data.id || userId);
+                document.getElementById('hdr-credits').innerHTML = '🎟️ <span>' + (data.credits ?? 5) + ' ครั้ง</span>';
+                document.getElementById('hdr-avatar').innerText = (data.username || 'TG').replace('@','').substring(0,2).toUpperCase();
 
                 if (data.connected) {
                     document.getElementById('dash-name').innerText = data.username || 'Connected User';
                     document.getElementById('dash-id').innerText = 'ID: ' + (data.id || userId);
-                    document.getElementById('dash-credits').innerText = '🎟️ โควตาคงเหลือ: ' + (data.credits ?? 5) + ' ครั้ง';
                     document.getElementById('dash-avatar').innerText = (data.username || 'TG').replace('@','').substring(0,2).toUpperCase();
                     showAuthStep(4);
                 }
             } catch (e) {}
+        }
+
+        async function handleTrueMoneyTopup() {
+            const link = document.getElementById('angpao-link-input').value.trim();
+            if (!link) { showAlert('กรุณาระบุลิงก์ซองอั่งเปา TrueMoney Wallet'); return; }
+            hideAlert();
+            setLoading('tp', true);
+
+            try {
+                const res = await fetch('/api/topup/truemoney', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: parseInt(currentUserId || 0),
+                        link: link
+                    })
+                });
+                const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
+                setLoading('tp', false);
+                if (res.ok && data.success) {
+                    showAlert(data.message, false);
+                    document.getElementById('angpao-link-input').value = '';
+                    checkLoginStatus(currentUserId);
+                } else {
+                    const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                    showAlert('เติมซองอั่งเปาไม่สำเร็จ: ' + errDetail);
+                }
+            } catch (e) {
+                setLoading('tp', false);
+                showAlert('เกิดข้อผิดพลาดในการรับซองอั่งเปา');
+            }
         }
 
         async function handleAdminAddCredits() {
@@ -702,22 +933,22 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 const data = await res.json();
                 if (res.ok && data.users) {
                     listEl.innerHTML = data.users.map(u => `
-                        <div class="user-row">
+                        <div class="item-row">
                             <div>
-                                <div style="font-weight:600; color:white;">ID: ${u.user_id} ${u.is_admin ? '👑' : ''}</div>
-                                <div style="font-size:11px; color:#94a3b8;">ดาวน์โหลดแล้ว: ${u.download_count} ครั้ง</div>
+                                <div class="item-name">👤 ${u.username || ('ID: ' + u.user_id)} ${u.is_admin ? '👑' : ''}</div>
+                                <div class="item-sub">ID: <code>${u.user_id}</code> | โหลดแล้ว: ${u.download_count} ครั้ง</div>
                             </div>
                             <div style="text-align:right;">
-                                <div style="color:#818cf8; font-weight:700;">🎟️ ${u.credits} ครั้ง</div>
-                                <button class="btn btn-sm" onclick="quickFillTarget('${u.user_id}')" style="margin-top:4px; padding:4px 8px; font-size:10px;">➕ เติมโควตา</button>
+                                <div style="color:var(--tg-blue); font-weight:600; font-size:12px;">🎟️ ${u.credits} ครั้ง</div>
+                                <button class="btn-primary btn-sm" onclick="quickFillTarget('${u.user_id}')" style="margin-top:4px; padding:4px 8px; font-size:11px;">➕ เติมโควตา</button>
                             </div>
                         </div>
                     `).join('');
                 } else {
-                    listEl.innerHTML = '<p style="font-size: 13px; color: #fca5a5; text-align: center;">คุณไม่มีสิทธิ์เข้าถึง Admin Panel</p>';
+                    listEl.innerHTML = '<p style="font-size: 13px; color: var(--tg-red); text-align: center;">คุณไม่มีสิทธิ์เข้าถึง Admin Panel</p>';
                 }
             } catch (e) {
-                listEl.innerHTML = '<p style="font-size: 13px; color: #fca5a5; text-align: center;">เกิดข้อผิดพลาดในการโหลดข้อมูล</p>';
+                listEl.innerHTML = '<p style="font-size: 13px; color: var(--tg-red); text-align: center;">เกิดข้อผิดพลาดในการโหลดข้อมูล</p>';
             }
         }
 
@@ -885,19 +1116,19 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 const data = await res.json();
                 if (data.files && data.files.length > 0) {
                     listEl.innerHTML = data.files.map(f => `
-                        <div class="file-item">
+                        <div class="item-row">
                             <div>
-                                <div class="file-name">${f.name}</div>
-                                <div class="file-size">${(f.size / (1024*1024)).toFixed(2)} MB</div>
+                                <div class="item-name">${f.name}</div>
+                                <div class="item-sub">${(f.size / (1024*1024)).toFixed(2)} MB</div>
                             </div>
-                            <a href="/api/downloads/${encodeURIComponent(f.name)}" download target="_blank" style="padding: 6px 12px; background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.4); border-radius: 8px; color: #818cf8; font-size: 12px; font-weight: 600; text-decoration: none;">📥 ดาวน์โหลด</a>
+                            <a href="/api/downloads/${encodeURIComponent(f.name)}" download target="_blank" style="padding: 6px 12px; background: rgba(51, 144, 236, 0.15); border: 1px solid rgba(51, 144, 236, 0.3); border-radius: 8px; color: var(--tg-blue); font-size: 12px; font-weight: 600; text-decoration: none;">📥 ดาวน์โหลด</a>
                         </div>
                     `).join('');
                 } else {
-                    listEl.innerHTML = '<p style="font-size: 13px; color: #94a3b8; text-align: center;">ยังไม่มีไฟล์ที่ดาวน์โหลดในขณะนี้</p>';
+                    listEl.innerHTML = '<p style="font-size: 13px; color: var(--tg-subtext); text-align: center;">ยังไม่มีไฟล์ที่ดาวน์โหลดในขณะนี้</p>';
                 }
             } catch (e) {
-                listEl.innerHTML = '<p style="font-size: 13px; color: #fca5a5; text-align: center;">เกิดข้อผิดพลาดในการโหลดรายการไฟล์</p>';
+                listEl.innerHTML = '<p style="font-size: 13px; color: var(--tg-red); text-align: center;">เกิดข้อผิดพลาดในการโหลดรายการไฟล์</p>';
             }
         }
     </script>

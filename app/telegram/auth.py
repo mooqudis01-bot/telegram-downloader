@@ -1,5 +1,5 @@
 """
-app/telegram/auth.py - Telethon StringSession Authentication & User Quota/Credit Service with Admin Authorization
+app/telegram/auth.py - Telethon StringSession Authentication & User Quota/Credit Service with Username Support
 """
 
 import os
@@ -61,15 +61,17 @@ def get_user_data(user_id: int) -> dict:
     sessions = load_user_sessions()
     raw = sessions.get(str(user_id), {})
     if isinstance(raw, str):
-        data = {"session": raw, "credits": DEFAULT_FREE_CREDITS, "download_count": 0}
+        data = {"session": raw, "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0}
     elif isinstance(raw, dict):
         data = raw
         if "credits" not in data:
             data["credits"] = DEFAULT_FREE_CREDITS
         if "download_count" not in data:
             data["download_count"] = 0
+        if "username" not in data:
+            data["username"] = f"ID: {user_id}"
     else:
-        data = {"session": "", "credits": DEFAULT_FREE_CREDITS, "download_count": 0}
+        data = {"session": "", "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0}
     return data
 
 
@@ -85,6 +87,16 @@ def save_user_data(user_id: int, data: dict):
         pass
 
 
+def update_user_profile(user_id: int, username: str = "", first_name: str = ""):
+    """Record user's Telegram username or display name."""
+    data = get_user_data(user_id)
+    if username:
+        data["username"] = username if username.startswith("@") else f"@{username}"
+    elif first_name:
+        data["username"] = first_name
+    save_user_data(user_id, data)
+
+
 def get_all_users_list() -> list:
     """Get list of all registered users for Admin Dashboard."""
     sessions = load_user_sessions()
@@ -97,10 +109,12 @@ def get_all_users_list() -> list:
         
         if isinstance(data, str):
             session_str = data
+            username = f"ID: {uid}"
             credits = DEFAULT_FREE_CREDITS
             download_count = 0
         elif isinstance(data, dict):
             session_str = data.get("session", "")
+            username = data.get("username", "") or data.get("first_name", "") or f"ID: {uid}"
             credits = data.get("credits", DEFAULT_FREE_CREDITS)
             download_count = data.get("download_count", 0)
         else:
@@ -108,6 +122,7 @@ def get_all_users_list() -> list:
 
         result.append({
             "user_id": uid,
+            "username": username,
             "connected": bool(session_str),
             "credits": credits,
             "download_count": download_count,
@@ -196,9 +211,10 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
     credits = data.get("credits", DEFAULT_FREE_CREDITS)
     session_str = data.get("session", "")
     admin_flag = is_admin(user_id)
+    saved_username = data.get("username", f"ID: {user_id}")
 
     if not session_str:
-        return {"connected": False, "credits": credits, "is_admin": admin_flag}
+        return {"connected": False, "credits": credits, "username": saved_username, "is_admin": admin_flag}
 
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
     client = TelegramClient(StringSession(session_str), api_id_int, api_hash_clean)
@@ -207,6 +223,7 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
         if await asyncio.wait_for(client.is_user_authorized(), timeout=6.0):
             me = await asyncio.wait_for(client.get_me(), timeout=6.0)
             username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
+            update_user_profile(user_id, username=me.username if me else "", first_name=me.first_name if me else "")
             return {
                 "connected": True,
                 "username": username,
@@ -216,9 +233,9 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
             }
         else:
             delete_user_session(user_id)
-            return {"connected": False, "credits": credits, "is_admin": admin_flag}
+            return {"connected": False, "credits": credits, "username": saved_username, "is_admin": admin_flag}
     except Exception:
-        return {"connected": True, "id": user_id, "username": f"ID: {user_id}", "credits": credits, "is_admin": admin_flag}
+        return {"connected": True, "id": user_id, "username": saved_username, "credits": credits, "is_admin": admin_flag}
     finally:
         try:
             await client.disconnect()
@@ -274,6 +291,8 @@ async def verify_otp(user_id: int, phone_number: str, phone_code_hash: str, code
 
             me = await asyncio.wait_for(client.get_me(), timeout=6.0)
             username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
+            update_user_profile(user_id, username=me.username if me else "", first_name=me.first_name if me else "")
+
             credits = get_user_credits(user_id)
             admin_flag = is_admin(user_id)
             return "SUCCESS", {"username": username, "id": me.id, "credits": credits, "is_admin": admin_flag}, None
@@ -314,6 +333,8 @@ async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
 
         me = await asyncio.wait_for(client.get_me(), timeout=6.0)
         username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
+        update_user_profile(user_id, username=me.username if me else "", first_name=me.first_name if me else "")
+
         credits = get_user_credits(user_id)
         admin_flag = is_admin(user_id)
         return True, {"username": username, "id": me.id, "credits": credits, "is_admin": admin_flag}, None

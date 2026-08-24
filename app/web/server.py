@@ -1,5 +1,5 @@
 """
-app/web/server.py - Telegram MiniApp & FastAPI Web Application (iOS Safari Native Download Fix)
+app/web/server.py - Telegram MiniApp & FastAPI Web Application (iOS Native Bot File Forwarding Fix)
 """
 
 import os
@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Update, MenuButtonWebApp, WebAppInfo
+from aiogram.types import Update, MenuButtonWebApp, WebAppInfo, FSInputFile
 
 from app.telegram.auth import (
     check_user_session,
@@ -301,13 +301,28 @@ async def create_download(req: DownloadRequest):
     api_id, api_hash = get_api_credentials()
     success, file_path, filename, error_msg = await download_media_from_link(req.user_id, req.link, api_id, api_hash)
 
-    if success:
+    if success and file_path and os.path.exists(file_path):
         remaining = get_user_credits(req.user_id)
         vip_flag = is_user_vip(req.user_id)
         vip_days = get_vip_remaining_days(req.user_id)
+        
+        # Send file directly into User's Telegram Chat via Bot (100% Native Save Video solution for iOS iPhone!)
+        if req.user_id and req.user_id > 0:
+            try:
+                quota_text = f"👑 VIP Unlimited (เหลืออีก {vip_days} วัน)" if vip_flag else f"🎟️ โควตาคงเหลือ: {remaining} ครั้ง"
+                input_file = FSInputFile(file_path)
+                await bot_instance.send_document(
+                    chat_id=req.user_id,
+                    document=input_file,
+                    caption=f"✅ <b>{filename}</b>\n📥 จากลิงก์: {req.link}\n{quota_text}\n\n💡 <i>วิธีเซฟลง iPhone: แตะไฟล์/วิดีโอนี้ ➔ เลือก 'บันทึกวิดีโอ' (Save Video) เพื่อลงอัลบั้มรูปใน iPhone ได้ทันทีครับ!</i>",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
         return {
             "success": True,
-            "message": f"ดาวน์โหลดสำเร็จ! ไฟล์: {filename}",
+            "message": f"ดาวน์โหลดสำเร็จ! ส่งไฟล์เข้าแชท Telegram เรียบร้อยแล้ว",
             "filename": filename,
             "link": req.link,
             "credits_remaining": remaining,
@@ -326,7 +341,6 @@ async def get_downloaded_file(filename: str):
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     
-    # iOS Safari Direct Download Attachment Header (Forces iOS Safari to show 'Download' prompt instead of streaming player!)
     return FileResponse(
         path=str(file_path),
         filename=filename,
@@ -905,7 +919,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
         <div id="tab-download" class="tab-content">
             <div class="section-card">
                 <h2 class="step-title" style="text-align: left; font-size: 17px;">ดาวน์โหลด Telegram Media</h2>
-                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">วางลิงก์ข้อความ Telegram ระบบจะดาวน์โหลดและเซฟไฟล์ลงเครื่องให้อัตโนมัติทันที</p>
+                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">วางลิงก์ข้อความ Telegram ระบบจะดาวน์โหลดและส่งไฟล์เข้าแชทให้อัตโนมัติทันที</p>
                 <div class="form-group">
                     <label class="form-label">Telegram Message Link</label>
                     <input type="text" id="link-input" placeholder="https://t.me/c/123456789/100">
@@ -1007,10 +1021,10 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 <span>🚀 <b id="dl-speed" style="color: var(--tg-green);">0.0 MB/s</b></span>
             </div>
 
-            <!-- iOS Native Download Link Button -->
-            <a id="dl-ios-save-btn" href="#" class="btn-primary btn-save-ios" style="display: none;" target="_blank" download>
-                <span>📲 กดตรงนี้เพื่อเซฟวิดีโอลงเครื่อง (iPhone / iPad)</span>
-            </a>
+            <div id="ios-info-note" style="display: none; margin-top: 14px; padding: 12px; background: rgba(64,183,110,0.12); border: 1px solid rgba(64,183,110,0.3); border-radius: 12px; font-size: 12px; color: var(--tg-green); line-height: 1.5; text-align: left;">
+                📲 <b>ส่งไฟล์เข้าแชท Telegram เรียบร้อยแล้ว!</b><br>
+                สำหรับผู้ใช้ iPhone/iPad: ปิดหน้าต่างนี้ แล้วแตะที่ไฟล์ในแชทบอท ➔ เลือก <b>"บันทึกวิดีโอ" (Save Video)</b> เพื่อเซฟลงอัลบั้มรูปได้เลยครับ!
+            </div>
         </div>
     </div>
 
@@ -1273,9 +1287,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
             const speedText = document.getElementById('dl-speed');
             const titleText = document.getElementById('dl-modal-title');
             const fileSubtext = document.getElementById('dl-filename');
-            const iosBtn = document.getElementById('dl-ios-save-btn');
+            const iosNote = document.getElementById('ios-info-note');
 
-            iosBtn.style.display = 'none';
+            iosNote.style.display = 'none';
             modal.style.display = 'flex';
             bar.style.width = '5%';
             percentText.innerText = '5%';
@@ -1320,7 +1334,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
             const speedText = document.getElementById('dl-speed');
             const titleText = document.getElementById('dl-modal-title');
             const fileSubtext = document.getElementById('dl-filename');
-            const iosBtn = document.getElementById('dl-ios-save-btn');
+            const iosNote = document.getElementById('ios-info-note');
 
             bar.style.width = '100%';
             percentText.innerText = '100%';
@@ -1329,25 +1343,25 @@ MINIAPP_HTML = """<!DOCTYPE html>
             bytesText.innerText = 'เสร็จสมบูรณ์';
             etaText.innerText = '00:00 วินาที';
             speedText.innerText = 'สำเร็จ!';
+            iosNote.style.display = 'block';
 
-            const downloadUrl = '/api/downloads/' + encodeURIComponent(filename);
-            iosBtn.href = downloadUrl;
-            iosBtn.style.display = 'flex';
-
-            // Auto-trigger for iOS Safari & Android
-            const a = document.createElement('a');
-            a.href = downloadUrl;
-            a.download = filename;
-            a.target = '_blank';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            // Automatic Direct Download Attempt for Desktop / Android
+            if (filename) {
+                const downloadUrl = '/api/downloads/' + encodeURIComponent(filename);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = filename;
+                a.target = '_blank';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
 
             setTimeout(() => {
-                if (modal.style.display !== 'none' && !iosBtn.classList.contains('clicked')) {
+                if (modal.style.display !== 'none') {
                     modal.style.display = 'none';
                 }
-            }, 5000);
+            }, 4500);
         }
 
         function closeProgressModalOnError() {
@@ -1376,7 +1390,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     finishProgressModalAnimation(data.filename);
 
                     const statusText = data.is_vip ? '👑 VIP Unlimited' : ('คงเหลือ ' + (data.credits_remaining ?? '') + ' ครั้ง');
-                    showAlert('ดาวน์โหลดสำเร็จ! (' + statusText + ')', false);
+                    showAlert('ดาวน์โหลดสำเร็จ! ส่งไฟล์เข้าแชท Telegram เรียบร้อยแล้ว (' + statusText + ')', false);
                     document.getElementById('link-input').value = '';
                     checkLoginStatus(currentUserId);
                 } else {

@@ -1,5 +1,5 @@
 """
-app/web/server.py - Telegram MiniApp & FastAPI Web Application (No Files Tab + Real-Time Download Progress Modal)
+app/web/server.py - Telegram MiniApp & FastAPI Web Application (iOS Safari Native Download Fix)
 """
 
 import os
@@ -326,9 +326,13 @@ async def get_downloaded_file(filename: str):
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     
-    # Auto-cleanup after serving
-    response = FileResponse(path=str(file_path), filename=filename)
-    return response
+    # iOS Safari Direct Download Attachment Header (Forces iOS Safari to show 'Download' prompt instead of streaming player!)
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
 MINIAPP_HTML = """<!DOCTYPE html>
@@ -599,6 +603,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
             align-items: center;
             justify-content: center;
             gap: 8px;
+            text-decoration: none;
         }
 
         .btn-primary:hover {
@@ -620,6 +625,12 @@ MINIAPP_HTML = """<!DOCTYPE html>
             background: rgba(229, 57, 53, 0.15);
             color: #ef5350;
             margin-top: 10px;
+        }
+
+        .btn-save-ios {
+            background: #40b76e !important;
+            margin-top: 14px;
+            font-weight: 700;
         }
 
         .btn-sm {
@@ -709,7 +720,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
         .modal-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.82);
             backdrop-filter: blur(8px);
             display: flex;
             align-items: center;
@@ -995,6 +1006,11 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 <span>⏳ เหลือเวลา: <b id="dl-eta-time" style="color: white;">กำลังคำนวณ...</b></span>
                 <span>🚀 <b id="dl-speed" style="color: var(--tg-green);">0.0 MB/s</b></span>
             </div>
+
+            <!-- iOS Native Download Link Button -->
+            <a id="dl-ios-save-btn" href="#" class="btn-primary btn-save-ios" style="display: none;" target="_blank" download>
+                <span>📲 กดตรงนี้เพื่อเซฟวิดีโอลงเครื่อง (iPhone / iPad)</span>
+            </a>
         </div>
     </div>
 
@@ -1257,7 +1273,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
             const speedText = document.getElementById('dl-speed');
             const titleText = document.getElementById('dl-modal-title');
             const fileSubtext = document.getElementById('dl-filename');
+            const iosBtn = document.getElementById('dl-ios-save-btn');
 
+            iosBtn.style.display = 'none';
             modal.style.display = 'flex';
             bar.style.width = '5%';
             percentText.innerText = '5%';
@@ -1302,18 +1320,34 @@ MINIAPP_HTML = """<!DOCTYPE html>
             const speedText = document.getElementById('dl-speed');
             const titleText = document.getElementById('dl-modal-title');
             const fileSubtext = document.getElementById('dl-filename');
+            const iosBtn = document.getElementById('dl-ios-save-btn');
 
             bar.style.width = '100%';
             percentText.innerText = '100%';
             titleText.innerText = '✅ ดาวน์โหลดสำเร็จเรียบร้อย!';
-            fileSubtext.innerText = 'บันทึกไฟล์: ' + (filename || 'media_file');
+            fileSubtext.innerText = 'ไฟล์: ' + (filename || 'media_file');
             bytesText.innerText = 'เสร็จสมบูรณ์';
             etaText.innerText = '00:00 วินาที';
             speedText.innerText = 'สำเร็จ!';
 
+            const downloadUrl = '/api/downloads/' + encodeURIComponent(filename);
+            iosBtn.href = downloadUrl;
+            iosBtn.style.display = 'flex';
+
+            // Auto-trigger for iOS Safari & Android
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = filename;
+            a.target = '_blank';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
             setTimeout(() => {
-                modal.style.display = 'none';
-            }, 1800);
+                if (modal.style.display !== 'none' && !iosBtn.classList.contains('clicked')) {
+                    modal.style.display = 'none';
+                }
+            }, 5000);
         }
 
         function closeProgressModalOnError() {
@@ -1342,19 +1376,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     finishProgressModalAnimation(data.filename);
 
                     const statusText = data.is_vip ? '👑 VIP Unlimited' : ('คงเหลือ ' + (data.credits_remaining ?? '') + ' ครั้ง');
-                    showAlert('ดาวน์โหลดสำเร็จ! กำลังเซฟไฟล์ลงเครื่อง... (' + statusText + ')', false);
+                    showAlert('ดาวน์โหลดสำเร็จ! (' + statusText + ')', false);
                     document.getElementById('link-input').value = '';
                     checkLoginStatus(currentUserId);
-
-                    if (data.filename) {
-                        const downloadUrl = '/api/downloads/' + encodeURIComponent(data.filename);
-                        const a = document.createElement('a');
-                        a.href = downloadUrl;
-                        a.download = data.filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                    }
                 } else {
                     closeProgressModalOnError();
                     const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);

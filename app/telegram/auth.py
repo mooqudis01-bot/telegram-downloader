@@ -1,5 +1,5 @@
 """
-app/telegram/auth.py - Telethon StringSession Authentication & User Quota/VIP Subscription Service
+app/telegram/auth.py - Telethon StringSession Authentication & User Quota/VIP Service (MongoDB Atlas Permanent Persistence)
 """
 
 import os
@@ -12,10 +12,19 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError
 
+try:
+    from pymongo import MongoClient
+    MONGODB_AVAILABLE = True
+except ImportError:
+    MONGODB_AVAILABLE = False
+
 DEFAULT_API_ID = 32825705
 DEFAULT_API_HASH = "4023849266ed4dfcd584031ce6b2a5f4"
 DEFAULT_FREE_CREDITS = 2
 ADMIN_IDS = [8314575937]
+DEFAULT_MONGO_URI = "mongodb+srv://mooqudis01_db_user:MJKloerFOMOMqGby@cluster0.ypdls9r.mongodb.net/?retryWrites=true&w=majority"
+
+mongo_client = None
 
 
 def is_admin(user_id: int) -> bool:
@@ -28,8 +37,25 @@ def is_admin(user_id: int) -> bool:
     return user_id in admin_ids or user_id in ADMIN_IDS
 
 
+def get_mongo_collection():
+    """Returns MongoDB collection for user sessions if available."""
+    global mongo_client
+    if not MONGODB_AVAILABLE:
+        return None
+    mongo_uri = os.getenv("MONGODB_URI", DEFAULT_MONGO_URI).strip()
+    if not mongo_uri:
+        return None
+    try:
+        if mongo_client is None:
+            mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=4000)
+        db = mongo_client["telegram_downloader"]
+        return db["user_sessions"]
+    except Exception:
+        return None
+
+
 def get_storage_file() -> Path:
-    """Returns path to user_sessions.json."""
+    """Returns path to user_sessions.json as local fallback."""
     if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
         d = Path(tempfile.gettempdir()) / "telegram_downloader_data"
         d.mkdir(exist_ok=True)
@@ -46,7 +72,21 @@ def get_storage_file() -> Path:
 
 
 def load_user_sessions() -> dict:
-    """Load all saved user StringSessions and credits from file."""
+    """Load all saved user StringSessions and credits from MongoDB Atlas or local JSON file."""
+    col = get_mongo_collection()
+    if col is not None:
+        try:
+            sessions = {}
+            for doc in col.find():
+                uid = str(doc.get("user_id", ""))
+                if uid:
+                    doc_copy = dict(doc)
+                    doc_copy.pop("_id", None)
+                    sessions[uid] = doc_copy
+            return sessions
+        except Exception:
+            pass
+
     filepath = get_storage_file()
     if filepath.exists():
         try:
@@ -59,27 +99,48 @@ def load_user_sessions() -> dict:
 
 def get_user_data(user_id: int) -> dict:
     """Get full user data dict including session, credits, and VIP status."""
+    col = get_mongo_collection()
+    if col is not None:
+        try:
+            doc = col.find_one({"user_id": str(user_id)})
+            if doc:
+                doc_copy = dict(doc)
+                doc_copy.pop("_id", None)
+                if "credits" not in doc_copy: doc_copy["credits"] = DEFAULT_FREE_CREDITS
+                if "download_count" not in doc_copy: doc_copy["download_count"] = 0
+                if "username" not in doc_copy: doc_copy["username"] = f"ID: {user_id}"
+                if "vip_until" not in doc_copy: doc_copy["vip_until"] = 0
+                return doc_copy
+        except Exception:
+            pass
+
     sessions = load_user_sessions()
     raw = sessions.get(str(user_id), {})
     if isinstance(raw, str):
-        data = {"session": raw, "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0, "vip_until": 0}
+        data = {"user_id": str(user_id), "session": raw, "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0, "vip_until": 0}
     elif isinstance(raw, dict):
         data = raw
-        if "credits" not in data:
-            data["credits"] = DEFAULT_FREE_CREDITS
-        if "download_count" not in data:
-            data["download_count"] = 0
-        if "username" not in data:
-            data["username"] = f"ID: {user_id}"
-        if "vip_until" not in data:
-            data["vip_until"] = 0
+        data["user_id"] = str(user_id)
+        if "credits" not in data: data["credits"] = DEFAULT_FREE_CREDITS
+        if "download_count" not in data: data["download_count"] = 0
+        if "username" not in data: data["username"] = f"ID: {user_id}"
+        if "vip_until" not in data: data["vip_until"] = 0
     else:
-        data = {"session": "", "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0, "vip_until": 0}
+        data = {"user_id": str(user_id), "session": "", "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0, "vip_until": 0}
     return data
 
 
 def save_user_data(user_id: int, data: dict):
-    """Save user data dict."""
+    """Save user data dict to MongoDB Atlas and local fallback."""
+    data["user_id"] = str(user_id)
+    
+    col = get_mongo_collection()
+    if col is not None:
+        try:
+            col.update_one({"user_id": str(user_id)}, {"$set": data}, upsert=True)
+        except Exception:
+            pass
+
     filepath = get_storage_file()
     sessions = load_user_sessions()
     sessions[str(user_id)] = data
@@ -174,7 +235,7 @@ def get_all_users_list() -> list:
 
 
 def save_user_session(user_id: int, session_str: str):
-    """Save user's StringSession to persistent JSON storage."""
+    """Save user's StringSession to persistent storage."""
     data = get_user_data(user_id)
     data["session"] = session_str
     save_user_data(user_id, data)
@@ -212,7 +273,6 @@ def add_user_credits(user_id: int, amount: int) -> int:
 def deduct_user_credit(user_id: int) -> bool:
     """Deduct 1 download credit from user. VIP users are free & unlimited."""
     if is_user_vip(user_id):
-        # VIP users have unlimited downloads!
         data = get_user_data(user_id)
         data["download_count"] = data.get("download_count", 0) + 1
         save_user_data(user_id, data)
@@ -252,10 +312,6 @@ def is_user_logged_in(user_id: int) -> bool:
 
 
 async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
-    """
-    Check if the user session is active and valid.
-    Returns info dict: {"connected": True/False, "username": "...", "id": ..., "credits": int, "is_vip": bool, "vip_days": int, "is_admin": bool}
-    """
     data = get_user_data(user_id)
     credits = data.get("credits", DEFAULT_FREE_CREDITS)
     session_str = data.get("session", "")

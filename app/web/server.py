@@ -1,6 +1,5 @@
 """
-app/web/server.py - Telegram MiniApp & FastAPI Web Application
-Telegram Downloader MiniApp UI, REST API, TrueMoney Angpao Topup & Webhook Service (Mobile Banking App Onboarding Flow)
+app/web/server.py - Telegram MiniApp & FastAPI Web Application (VIP Unlimited Package Support)
 """
 
 import os
@@ -26,7 +25,10 @@ from app.telegram.auth import (
     add_user_credits,
     is_admin,
     get_all_users_list,
-    update_user_profile
+    update_user_profile,
+    is_user_vip,
+    get_vip_remaining_days,
+    add_user_vip_days
 )
 from app.telegram.media import download_media_from_link
 from app.services.truemoney import redeem_truemoney_angpao
@@ -124,6 +126,7 @@ class AdminAddCreditsRequest(BaseModel):
     admin_id: int
     target_user_id: int
     amount: int
+    is_vip: bool = False
 
 
 class TrueMoneyTopupRequest(BaseModel):
@@ -171,18 +174,31 @@ async def api_topup_truemoney(req: TrueMoneyTopupRequest):
     success, amount, error_msg = await redeem_truemoney_angpao(phone, req.link)
 
     if success:
-        credits_to_add = int(amount)
-        if credits_to_add <= 0:
-            credits_to_add = 1
+        if amount >= 300:
+            vip_weeks = int(amount / 300.0)
+            vip_days = vip_weeks * 7
+            add_user_vip_days(req.user_id, vip_days)
+            rem_days = get_vip_remaining_days(req.user_id)
+            return {
+                "success": True,
+                "message": f"👑 ปลดล็อค VIP Unlimited สำเร็จ! ได้รับสิทธิ์ดาวน์โหลดไม่จำกัด +{vip_days} วัน (ยอดซอง {amount:.2f} บาท)",
+                "amount_baht": amount,
+                "is_vip": True,
+                "vip_days_remaining": rem_days
+            }
+        else:
+            credits_to_add = int(amount / 5.0)
+            if credits_to_add <= 0:
+                credits_to_add = 1
 
-        new_balance = add_user_credits(req.user_id, credits_to_add)
-        return {
-            "success": True,
-            "message": f"เติมเงินสำเร็จ! ได้รับโควตา +{credits_to_add} ครั้ง (ยอดซอง {amount:.2f} บาท)",
-            "amount_baht": amount,
-            "credits_added": credits_to_add,
-            "new_balance": new_balance
-        }
+            new_balance = add_user_credits(req.user_id, credits_to_add)
+            return {
+                "success": True,
+                "message": f"เติมเงินสำเร็จ! ได้รับโควตา +{credits_to_add} ครั้ง (อัตรา 50 บาท = 10 ครั้ง)",
+                "amount_baht": amount,
+                "credits_added": credits_to_add,
+                "new_balance": new_balance
+            }
     else:
         raise HTTPException(status_code=400, detail=error_msg or "เติมซองอั่งเปาไม่สำเร็จ")
 
@@ -199,13 +215,26 @@ async def admin_get_users(admin_id: int):
 async def admin_add_credits(req: AdminAddCreditsRequest):
     if not is_admin(req.admin_id):
         raise HTTPException(status_code=403, detail="⛔ สิทธิ์การใช้งานปฏิเสธ: เฉพาะแอดมินเท่านั้น")
-    new_credits = add_user_credits(req.target_user_id, req.amount)
-    return {
-        "success": True,
-        "message": f"เติมเครดิตให้ User {req.target_user_id} จำนวน +{req.amount} ครั้งเรียบร้อย",
-        "target_user_id": req.target_user_id,
-        "new_credits": new_credits
-    }
+    
+    if req.is_vip:
+        days_to_add = req.amount if req.amount > 0 else 7
+        add_user_vip_days(req.target_user_id, days_to_add)
+        rem_days = get_vip_remaining_days(req.target_user_id)
+        return {
+            "success": True,
+            "message": f"เติมสิทธิ์ VIP Unlimited ให้ User {req.target_user_id} จำนวน +{days_to_add} วันเรียบร้อย (คงเหลือ {rem_days} วัน)",
+            "target_user_id": req.target_user_id,
+            "is_vip": True,
+            "vip_days": rem_days
+        }
+    else:
+        new_credits = add_user_credits(req.target_user_id, req.amount)
+        return {
+            "success": True,
+            "message": f"เติมเครดิตให้ User {req.target_user_id} จำนวน +{req.amount} ครั้งเรียบร้อย",
+            "target_user_id": req.target_user_id,
+            "new_credits": new_credits
+        }
 
 
 @app.get("/api/auth/status/{user_id}")
@@ -213,6 +242,8 @@ async def auth_status(user_id: int):
     api_id, api_hash = get_api_credentials()
     res = await check_user_session(user_id, api_id, api_hash)
     res["credits"] = get_user_credits(user_id)
+    res["is_vip"] = is_user_vip(user_id)
+    res["vip_days"] = get_vip_remaining_days(user_id)
     res["is_admin"] = is_admin(user_id)
     return res
 
@@ -278,12 +309,16 @@ async def create_download(req: DownloadRequest):
 
     if success:
         remaining = get_user_credits(req.user_id)
+        vip_flag = is_user_vip(req.user_id)
+        vip_days = get_vip_remaining_days(req.user_id)
         return {
             "success": True,
             "message": f"ดาวน์โหลดสำเร็จ! ไฟล์: {filename}",
             "filename": filename,
             "link": req.link,
             "credits_remaining": remaining,
+            "is_vip": vip_flag,
+            "vip_days_remaining": vip_days,
             "status": "completed"
         }
     else:
@@ -335,6 +370,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
             --tg-border: rgba(255, 255, 255, 0.08);
             --tg-green: #40b76e;
             --tg-red: #e53935;
+            --tg-gold: #f59e0b;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; -webkit-tap-highlight-color: transparent; }
@@ -354,14 +390,14 @@ MINIAPP_HTML = """<!DOCTYPE html>
             width: 100%;
         }
 
-        /* Profile Header */
+        /* Profile Header Bar (Hidden by default until logged in) */
         .profile-card {
             background: var(--tg-card);
             border: 1px solid var(--tg-border);
             border-radius: 16px;
             padding: 14px 16px;
             margin-bottom: 14px;
-            display: flex;
+            display: none;
             align-items: center;
             justify-content: space-between;
         }
@@ -407,13 +443,19 @@ MINIAPP_HTML = """<!DOCTYPE html>
             font-weight: 600;
         }
 
-        /* Nav Segmented Control */
+        .vip-badge {
+            background: rgba(245, 158, 11, 0.15) !important;
+            color: var(--tg-gold) !important;
+            border: 1px solid rgba(245, 158, 11, 0.3) !important;
+        }
+
+        /* Segmented Nav Bar (Hidden by default until logged in) */
         .nav-segmented {
             background: var(--tg-card);
             border: 1px solid var(--tg-border);
             border-radius: 12px;
             padding: 3px;
-            display: flex;
+            display: none;
             margin-bottom: 16px;
         }
 
@@ -532,6 +574,31 @@ MINIAPP_HTML = """<!DOCTYPE html>
             border-color: var(--tg-blue) !important;
             box-shadow: 0 0 12px rgba(51, 144, 236, 0.3);
         }
+
+        /* Pricing Card Grid */
+        .price-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+
+        .price-card {
+            background: var(--tg-input);
+            border: 1px solid var(--tg-border);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .price-card.vip {
+            border-color: rgba(245, 158, 11, 0.4);
+            background: rgba(245, 158, 11, 0.06);
+        }
+
+        .price-title { font-size: 13px; font-weight: 700; color: white; margin-bottom: 4px; }
+        .price-val { font-size: 16px; font-weight: 800; color: var(--tg-blue); }
+        .price-card.vip .price-val { color: var(--tg-gold); }
 
         /* Buttons */
         .btn-primary {
@@ -658,8 +725,8 @@ MINIAPP_HTML = """<!DOCTYPE html>
 </head>
 <body>
     <div class="container">
-        <!-- Profile Header Bar -->
-        <div class="profile-card">
+        <!-- Profile Header Bar (Hidden by default until logged in) -->
+        <div class="profile-card" id="header-bar-card">
             <div class="profile-left">
                 <div class="avatar" id="hdr-avatar">TG</div>
                 <div>
@@ -668,15 +735,15 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 </div>
             </div>
             <div class="credit-badge" id="hdr-credits">
-                🎟️ <span>5 ครั้ง</span>
+                🎟️ <span>2 ครั้ง</span>
             </div>
         </div>
 
-        <!-- Segmented Control Nav Bar -->
-        <div class="nav-segmented">
+        <!-- Segmented Control Nav Bar (Hidden by default until logged in) -->
+        <div class="nav-segmented" id="main-nav-bar">
             <button class="nav-btn active" onclick="switchTab('auth', event)">Account</button>
             <button class="nav-btn" onclick="switchTab('download', event)">Downloader</button>
-            <button class="nav-btn" onclick="switchTab('topup', event)">เติมเงิน</button>
+            <button class="nav-btn" onclick="switchTab('topup', event)">เติมเงิน/VIP</button>
             <button class="nav-btn" onclick="switchTab('files', event)">Files</button>
             <button class="nav-btn" id="admin-tab-btn" style="display: none;" onclick="switchTab('admin', event)">Admin</button>
         </div>
@@ -766,26 +833,40 @@ MINIAPP_HTML = """<!DOCTYPE html>
         <div id="tab-download" class="tab-content">
             <div class="section-card">
                 <h2 class="step-title" style="text-align: left; font-size: 17px;">ดาวน์โหลด Telegram Media</h2>
-                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">วางลิงก์ข้อความ Telegram เพื่อเริ่มดาวน์โหลดไฟล์สื่อ</p>
+                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">วางลิงก์ข้อความ Telegram ระบบจะดาวน์โหลดและเซฟไฟล์ลงเครื่องให้ทันที</p>
                 <div class="form-group">
                     <label class="form-label">Telegram Message Link</label>
                     <input type="text" id="link-input" placeholder="https://t.me/c/123456789/100">
                 </div>
                 <button class="btn-primary" onclick="handleStartDownload()">
                     <span class="spinner" id="sp-dl"></span>
-                    <span>เริ่มดาวน์โหลด</span>
+                    <span>📥 เริ่มดาวน์โหลดและเซฟลงเครื่อง</span>
                 </button>
             </div>
         </div>
 
-        <!-- TAB 3: TOPUP -->
+        <!-- TAB 3: TOPUP & VIP -->
         <div id="tab-topup" class="tab-content">
             <div class="section-card">
-                <h2 class="step-title" style="text-align: left; font-size: 17px;">เติมโควตาดาวน์โหลด (TrueMoney)</h2>
-                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">เติมโควตาอัตโนมัติ 24 ชม. ผ่านซองอั่งเปา TrueMoney (1 บาท = 1 โควตา)</p>
-                
+                <h2 class="step-title" style="text-align: left; font-size: 17px;">เติมโควตา / สมัคร VIP</h2>
+                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">เติมเงินอัตโนมัติ 24 ชม. ผ่านซองอั่งเปา TrueMoney Wallet</p>
+
+                <!-- Pricing Package Grid -->
+                <div class="price-grid">
+                    <div class="price-card">
+                        <div class="price-title">🎟️ เติมตามครั้ง</div>
+                        <div class="price-val">50 บาท</div>
+                        <div style="font-size: 11px; color: var(--tg-subtext); margin-top: 2px;">10 ครั้งดาวน์โหลด</div>
+                    </div>
+                    <div class="price-card vip">
+                        <div class="price-title">👑 VIP Unlimited</div>
+                        <div class="price-val">300 บาท</div>
+                        <div style="font-size: 11px; color: var(--tg-gold); margin-top: 2px;">ดาวน์โหลดไม่จำกัด 7 วัน</div>
+                    </div>
+                </div>
+
                 <div class="info-box">
-                    📌 <b>วิธีสร้างซองอั่งเปา:</b> เปิดแอป TrueMoney Wallet ➔ เลือก <b>ส่งซองอั่งเปา</b> ➔ ใส่ยอดเงิน ➔ กำหนดจำนวนคนรับ = <b>1 คน</b> ➔ คัดลอกลิงก์มาวางด้านล่าง
+                    📌 <b>วิธีสมัคร / เติมเงิน:</b> เปิดแอป TrueMoney Wallet ➔ เลือก <b>ส่งซองอั่งเปา</b> ➔ ใส่ยอดเงิน (50 บาท หรือ 300 บาท) ➔ กำหนดจำนวนคนรับ = <b>1 คน</b> ➔ คัดลอกลิงก์มาวางด้านล่าง
                 </div>
 
                 <div class="form-group">
@@ -794,7 +875,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 </div>
                 <button class="btn-primary" onclick="handleTrueMoneyTopup()">
                     <span class="spinner" id="sp-tp"></span>
-                    <span>ยืนยันการเติมเงิน</span>
+                    <span>🧧 ยืนยันการเติมเงิน / สมัคร VIP</span>
                 </button>
             </div>
         </div>
@@ -814,21 +895,26 @@ MINIAPP_HTML = """<!DOCTYPE html>
         <div id="tab-admin" class="tab-content">
             <div class="section-card">
                 <h2 class="step-title" style="text-align: left; font-size: 17px;">Admin Control Panel</h2>
-                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">จัดการโควตาดาวน์โหลดให้ผู้ใช้ในระบบ</p>
+                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">จัดการโควตา และสิทธิ์ VIP ให้ผู้ใช้ในระบบ</p>
                 
                 <div style="background: var(--tg-input); padding: 14px; border-radius: 12px; margin-bottom: 16px; border: 1px solid var(--tg-border);">
-                    <div style="font-size: 13px; font-weight: 600; color: white; margin-bottom: 10px;">➕ เติมโควตาให้ผู้ใช้</div>
+                    <div style="font-size: 13px; font-weight: 600; color: white; margin-bottom: 10px;">➕ เติมโควตา / VIP ให้ผู้ใช้</div>
                     <div class="form-group">
                         <label class="form-label">Telegram User ID</label>
                         <input type="text" id="admin-target-id" placeholder="เช่น 8314575937">
                     </div>
                     <div class="form-group">
-                        <label class="form-label">จำนวนโควตา (ครั้ง)</label>
-                        <input type="number" id="admin-amount" placeholder="เช่น 50">
+                        <label class="form-label">จำนวน (ครั้ง หรือ วัน VIP)</label>
+                        <input type="number" id="admin-amount" placeholder="เช่น 50 ครั้ง หรือ 7 วัน">
                     </div>
-                    <button class="btn-primary" onclick="handleAdminAddCredits()">
-                        <span>ยืนยันเติมโควตา</span>
-                    </button>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn-primary" style="flex:1;" onclick="handleAdminAddCredits(false)">
+                            <span>➕ เติมครั้ง</span>
+                        </button>
+                        <button class="btn-primary" style="flex:1; background: var(--tg-gold);" onclick="handleAdminAddCredits(true)">
+                            <span>👑 เติม VIP (วัน)</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div style="font-size: 13px; font-weight: 600; color: white; margin-bottom: 10px;">👥 รายชื่อผู้ใช้ทั้งหมด</div>
@@ -921,22 +1007,42 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 const res = await fetch('/api/auth/status/' + userId);
                 const data = await res.json();
                 
-                if (data.is_admin) {
-                    document.getElementById('admin-tab-btn').style.display = 'block';
-                }
-
-                document.getElementById('hdr-name').innerText = data.username || 'User Account';
-                document.getElementById('hdr-id').innerText = 'ID: ' + (data.id || userId);
-                document.getElementById('hdr-credits').innerHTML = '🎟️ <span>' + (data.credits ?? 5) + ' ครั้ง</span>';
-                document.getElementById('hdr-avatar').innerText = (data.username || 'TG').replace('@','').substring(0,2).toUpperCase();
-
                 if (data.connected) {
+                    document.getElementById('header-bar-card').style.display = 'flex';
+                    document.getElementById('main-nav-bar').style.display = 'flex';
+
+                    if (data.is_admin) {
+                        document.getElementById('admin-tab-btn').style.display = 'block';
+                    }
+
+                    document.getElementById('hdr-name').innerText = data.username || 'User Account';
+                    document.getElementById('hdr-id').innerText = 'ID: ' + (data.id || userId);
+                    
+                    const badgeEl = document.getElementById('hdr-credits');
+                    if (data.is_vip) {
+                        badgeEl.className = 'credit-badge vip-badge';
+                        badgeEl.innerHTML = '👑 VIP <span>(เหลือ ' + (data.vip_days || 1) + ' วัน)</span>';
+                    } else {
+                        badgeEl.className = 'credit-badge';
+                        badgeEl.innerHTML = '🎟️ <span>' + (data.credits ?? 2) + ' ครั้ง</span>';
+                    }
+
+                    document.getElementById('hdr-avatar').innerText = (data.username || 'TG').replace('@','').substring(0,2).toUpperCase();
+
                     document.getElementById('dash-name').innerText = data.username || 'Connected User';
                     document.getElementById('dash-id').innerText = 'ID: ' + (data.id || userId);
                     document.getElementById('dash-avatar').innerText = (data.username || 'TG').replace('@','').substring(0,2).toUpperCase();
                     showAuthStep(4);
+                } else {
+                    document.getElementById('header-bar-card').style.display = 'none';
+                    document.getElementById('main-nav-bar').style.display = 'none';
+                    showAuthStep(1);
                 }
-            } catch (e) {}
+            } catch (e) {
+                document.getElementById('header-bar-card').style.display = 'none';
+                document.getElementById('main-nav-bar').style.display = 'none';
+                showAuthStep(1);
+            }
         }
 
         async function handleSendOtp() {
@@ -1059,6 +1165,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 });
                 setLoading(4, false);
                 showAlert('ออกจากระบบเรียบร้อยแล้ว', false);
+                
+                document.getElementById('header-bar-card').style.display = 'none';
+                document.getElementById('main-nav-bar').style.display = 'none';
                 showAuthStep(1);
             } catch (e) {
                 setLoading(4, false);
@@ -1080,9 +1189,20 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
                 setLoading('dl', false);
                 if (res.ok && data.success) {
-                    showAlert('ดาวน์โหลดสำเร็จ! ไฟล์: ' + (data.filename || '') + ' (คงเหลือ ' + (data.credits_remaining ?? '') + ' ครั้ง)', false);
+                    const statusText = data.is_vip ? '👑 VIP Unlimited' : ('คงเหลือ ' + (data.credits_remaining ?? '') + ' ครั้ง');
+                    showAlert('ดาวน์โหลดสำเร็จ! กำลังเซฟไฟล์ลงเครื่อง... (' + statusText + ')', false);
                     document.getElementById('link-input').value = '';
                     checkLoginStatus(currentUserId);
+
+                    if (data.filename) {
+                        const downloadUrl = '/api/downloads/' + encodeURIComponent(data.filename);
+                        const a = document.createElement('a');
+                        a.href = downloadUrl;
+                        a.download = data.filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
                 } else {
                     const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
                     showAlert('ดาวน์โหลดไม่สำเร็จ: ' + errDetail);
@@ -1124,12 +1244,12 @@ MINIAPP_HTML = """<!DOCTYPE html>
             }
         }
 
-        async function handleAdminAddCredits() {
+        async function handleAdminAddCredits(isVipMode) {
             const targetId = document.getElementById('admin-target-id').value.trim();
             const amount = document.getElementById('admin-amount').value.trim();
 
             if (!targetId || !amount) {
-                showAlert('กรุณาระบุ Telegram User ID และ จำนวนโควตา');
+                showAlert('กรุณาระบุ Telegram User ID และ จำนวน');
                 return;
             }
 
@@ -1141,7 +1261,8 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     body: JSON.stringify({
                         admin_id: parseInt(currentUserId),
                         target_user_id: parseInt(targetId),
-                        amount: parseInt(amount)
+                        amount: parseInt(amount),
+                        is_vip: isVipMode
                     })
                 });
                 const data = await res.json();
@@ -1151,7 +1272,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     document.getElementById('admin-amount').value = '';
                     loadAdminUsers();
                 } else {
-                    showAlert(data.detail || 'ไม่สามารถเติมเครดิตได้');
+                    showAlert(data.detail || 'ไม่สามารถเติมเครดิต/VIP ได้');
                 }
             } catch (e) {
                 showAlert('เกิดข้อผิดพลาดในการเติมเครดิต');
@@ -1171,8 +1292,11 @@ MINIAPP_HTML = """<!DOCTYPE html>
                                 <div class="item-sub">ID: <code>${u.user_id}</code> | โหลดแล้ว: ${u.download_count} ครั้ง</div>
                             </div>
                             <div style="text-align:right;">
-                                <div style="color:var(--tg-blue); font-weight:600; font-size:12px;">🎟️ ${u.credits} ครั้ง</div>
-                                <button class="btn-primary btn-sm" onclick="quickFillTarget('${u.user_id}')" style="margin-top:4px; padding:4px 8px; font-size:11px;">➕ เติมโควตา</button>
+                                ${u.is_vip ? `<div style="color:var(--tg-gold); font-weight:700; font-size:12px;">👑 VIP (${u.vip_days} วัน)</div>` : `<div style="color:var(--tg-blue); font-weight:600; font-size:12px;">🎟️ ${u.credits} ครั้ง</div>`}
+                                <div style="display:flex; gap:4px; margin-top:4px;">
+                                    <button class="btn-primary btn-sm" onclick="quickFillTarget('${u.user_id}')" style="padding:3px 6px; font-size:10px;">➕ ครั้ง</button>
+                                    <button class="btn-primary btn-sm" onclick="quickFillTarget('${u.user_id}', true)" style="padding:3px 6px; font-size:10px; background:var(--tg-gold);">👑 VIP</button>
+                                </div>
                             </div>
                         </div>
                     `).join('');
@@ -1184,8 +1308,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
             }
         }
 
-        function quickFillTarget(uid) {
+        function quickFillTarget(uid, isVip = false) {
             document.getElementById('admin-target-id').value = uid;
+            document.getElementById('admin-amount').placeholder = isVip ? 'ระบุจำนวนวัน VIP (เช่น 7)' : 'ระบุจำนวนครั้ง (เช่น 50)';
             document.getElementById('admin-amount').focus();
         }
 

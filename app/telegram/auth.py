@@ -1,9 +1,10 @@
 """
-app/telegram/auth.py - Telethon StringSession Authentication & User Quota/Credit Service with Username Support
+app/telegram/auth.py - Telethon StringSession Authentication & User Quota/VIP Subscription Service
 """
 
 import os
 import json
+import time
 import asyncio
 import tempfile
 from pathlib import Path
@@ -13,7 +14,7 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, P
 
 DEFAULT_API_ID = 32825705
 DEFAULT_API_HASH = "4023849266ed4dfcd584031ce6b2a5f4"
-DEFAULT_FREE_CREDITS = 5
+DEFAULT_FREE_CREDITS = 2
 ADMIN_IDS = [8314575937]
 
 
@@ -57,11 +58,11 @@ def load_user_sessions() -> dict:
 
 
 def get_user_data(user_id: int) -> dict:
-    """Get full user data dict including session and credits."""
+    """Get full user data dict including session, credits, and VIP status."""
     sessions = load_user_sessions()
     raw = sessions.get(str(user_id), {})
     if isinstance(raw, str):
-        data = {"session": raw, "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0}
+        data = {"session": raw, "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0, "vip_until": 0}
     elif isinstance(raw, dict):
         data = raw
         if "credits" not in data:
@@ -70,8 +71,10 @@ def get_user_data(user_id: int) -> dict:
             data["download_count"] = 0
         if "username" not in data:
             data["username"] = f"ID: {user_id}"
+        if "vip_until" not in data:
+            data["vip_until"] = 0
     else:
-        data = {"session": "", "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0}
+        data = {"session": "", "username": f"ID: {user_id}", "credits": DEFAULT_FREE_CREDITS, "download_count": 0, "vip_until": 0}
     return data
 
 
@@ -85,6 +88,38 @@ def save_user_data(user_id: int, data: dict):
             json.dump(sessions, f, indent=2)
     except Exception:
         pass
+
+
+def is_user_vip(user_id: int) -> bool:
+    """Check if user currently has an active VIP Unlimited subscription."""
+    data = get_user_data(user_id)
+    vip_until = data.get("vip_until", 0)
+    return vip_until > time.time()
+
+
+def get_vip_remaining_days(user_id: int) -> int:
+    """Returns remaining VIP days for user."""
+    data = get_user_data(user_id)
+    vip_until = data.get("vip_until", 0)
+    now = time.time()
+    if vip_until > now:
+        remaining_seconds = vip_until - now
+        return max(1, int(remaining_seconds / 86400))
+    return 0
+
+
+def add_user_vip_days(user_id: int, days: int) -> float:
+    """Grant VIP Unlimited access for specified number of days."""
+    data = get_user_data(user_id)
+    now = time.time()
+    current_until = data.get("vip_until", 0)
+    if current_until > now:
+        new_until = current_until + (days * 86400)
+    else:
+        new_until = now + (days * 86400)
+    data["vip_until"] = new_until
+    save_user_data(user_id, data)
+    return new_until
 
 
 def update_user_profile(user_id: int, username: str = "", first_name: str = ""):
@@ -112,11 +147,16 @@ def get_all_users_list() -> list:
             username = f"ID: {uid}"
             credits = DEFAULT_FREE_CREDITS
             download_count = 0
+            is_vip = False
+            vip_days = 0
         elif isinstance(data, dict):
             session_str = data.get("session", "")
             username = data.get("username", "") or data.get("first_name", "") or f"ID: {uid}"
             credits = data.get("credits", DEFAULT_FREE_CREDITS)
             download_count = data.get("download_count", 0)
+            vip_until = data.get("vip_until", 0)
+            is_vip = vip_until > time.time()
+            vip_days = max(1, int((vip_until - time.time()) / 86400)) if is_vip else 0
         else:
             continue
 
@@ -126,6 +166,8 @@ def get_all_users_list() -> list:
             "connected": bool(session_str),
             "credits": credits,
             "download_count": download_count,
+            "is_vip": is_vip,
+            "vip_days": vip_days,
             "is_admin": is_admin(uid)
         })
     return result
@@ -168,7 +210,14 @@ def add_user_credits(user_id: int, amount: int) -> int:
 
 
 def deduct_user_credit(user_id: int) -> bool:
-    """Deduct 1 download credit from user."""
+    """Deduct 1 download credit from user. VIP users are free & unlimited."""
+    if is_user_vip(user_id):
+        # VIP users have unlimited downloads!
+        data = get_user_data(user_id)
+        data["download_count"] = data.get("download_count", 0) + 1
+        save_user_data(user_id, data)
+        return True
+
     data = get_user_data(user_id)
     current = data.get("credits", DEFAULT_FREE_CREDITS)
     if current <= 0:
@@ -205,16 +254,18 @@ def is_user_logged_in(user_id: int) -> bool:
 async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
     """
     Check if the user session is active and valid.
-    Returns info dict: {"connected": True/False, "username": "...", "id": ..., "credits": int, "is_admin": bool}
+    Returns info dict: {"connected": True/False, "username": "...", "id": ..., "credits": int, "is_vip": bool, "vip_days": int, "is_admin": bool}
     """
     data = get_user_data(user_id)
     credits = data.get("credits", DEFAULT_FREE_CREDITS)
     session_str = data.get("session", "")
     admin_flag = is_admin(user_id)
     saved_username = data.get("username", f"ID: {user_id}")
+    vip_flag = is_user_vip(user_id)
+    vip_days = get_vip_remaining_days(user_id)
 
     if not session_str:
-        return {"connected": False, "credits": credits, "username": saved_username, "is_admin": admin_flag}
+        return {"connected": False, "credits": credits, "is_vip": vip_flag, "vip_days": vip_days, "username": saved_username, "is_admin": admin_flag}
 
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
     client = TelegramClient(StringSession(session_str), api_id_int, api_hash_clean)
@@ -229,13 +280,15 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
                 "username": username,
                 "id": me.id if me else user_id,
                 "credits": credits,
+                "is_vip": vip_flag,
+                "vip_days": vip_days,
                 "is_admin": admin_flag
             }
         else:
             delete_user_session(user_id)
-            return {"connected": False, "credits": credits, "username": saved_username, "is_admin": admin_flag}
+            return {"connected": False, "credits": credits, "is_vip": vip_flag, "vip_days": vip_days, "username": saved_username, "is_admin": admin_flag}
     except Exception:
-        return {"connected": True, "id": user_id, "username": saved_username, "credits": credits, "is_admin": admin_flag}
+        return {"connected": True, "id": user_id, "username": saved_username, "credits": credits, "is_vip": vip_flag, "vip_days": vip_days, "is_admin": admin_flag}
     finally:
         try:
             await client.disconnect()
@@ -244,10 +297,6 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
 
 
 async def send_otp(user_id: int, phone_number: str, api_id: int, api_hash: str):
-    """
-    Send OTP code to user's Telegram account using Telethon.
-    Returns: (success: bool, phone_code_hash: str, error_message: str)
-    """
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
     phone_clean = phone_number.strip().replace(" ", "").replace("-", "")
 
@@ -272,10 +321,6 @@ async def send_otp(user_id: int, phone_number: str, api_id: int, api_hash: str):
 
 
 async def verify_otp(user_id: int, phone_number: str, phone_code_hash: str, code: str, api_id: int, api_hash: str):
-    """
-    Verify the OTP code entered by user.
-    Returns: (status: str ["SUCCESS", "NEED_2FA", "INVALID_CODE", "ERROR"], user_info: dict, error_msg: str)
-    """
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
     phone_clean = phone_number.strip().replace(" ", "").replace("-", "")
     session_str = get_user_session_string(user_id)
@@ -316,10 +361,6 @@ async def verify_otp(user_id: int, phone_number: str, phone_code_hash: str, code
 
 
 async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
-    """
-    Verify 2FA password.
-    Returns: (success: bool, user_info: dict, error_msg: str)
-    """
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
     session_str = get_user_session_string(user_id)
 
@@ -350,7 +391,6 @@ async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
 
 
 async def logout_user(user_id: int, api_id: int, api_hash: str) -> bool:
-    """Log out and remove user's session string."""
     session_str = get_user_session_string(user_id)
     if session_str:
         api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)

@@ -1,5 +1,5 @@
 """
-app/handlers/start.py - Start Command, Admin Credit Management, TrueMoney Angpao & Link Handler for aiogram 3.x
+app/handlers/start.py - Start Command, Admin Credit Management, TrueMoney Angpao (VIP Unlimited 300B/week)
 """
 
 import os
@@ -8,7 +8,16 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, FSInputFile
 from aiogram.utils.markdown import html_decoration as hd
 
-from app.telegram.auth import check_user_session, get_user_credits, add_user_credits, is_admin, update_user_profile
+from app.telegram.auth import (
+    check_user_session,
+    get_user_credits,
+    add_user_credits,
+    is_admin,
+    update_user_profile,
+    is_user_vip,
+    get_vip_remaining_days,
+    add_user_vip_days
+)
 from app.telegram.media import download_media_from_link
 from app.services.truemoney import redeem_truemoney_angpao
 
@@ -42,9 +51,6 @@ def get_webapp_url():
 
 @router.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
-    """
-    Handler for /start command - Displays status, credits, Chat Login, and Telegram MiniApp.
-    """
     user_id = message.from_user.id
     raw_user_name = message.from_user.full_name if message.from_user else "User"
     user_name = hd.quote(raw_user_name)
@@ -58,6 +64,10 @@ async def command_start_handler(message: Message) -> None:
     session_info = await check_user_session(user_id, api_id, api_hash)
     credits = get_user_credits(user_id)
     admin_flag = is_admin(user_id)
+    vip_flag = is_user_vip(user_id)
+    vip_days = get_vip_remaining_days(user_id)
+
+    quota_badge = f"👑 <b>VIP Status:</b> Unlimited (เหลืออีก {vip_days} วัน)" if vip_flag else f"🎟️ <b>โควตาดาวน์โหลดคงเหลือ:</b> <code>{credits} ครั้ง</code>"
 
     if session_info.get("connected"):
         username = hd.quote(session_info.get("username", user_name))
@@ -67,13 +77,15 @@ async def command_start_handler(message: Message) -> None:
             "🤖 <b>ยินดีต้อนรับสู่ Telegram Downloader MiniApp</b>\n\n"
             f"🟢 <b>Telegram Account:</b> Connected (<code>{username}</code>)\n"
             f"📱 <b>Telegram ID:</b> <code>{user_id}</code>"
-            f"{admin_badge}"
-            f"🎟️ <b>โควตาดาวน์โหลดคงเหลือ:</b> <code>{credits} ครั้ง</code>\n\n"
-            "✨ ส่ง Telegram Link เพื่อดาวน์โหลดสื่อ หรือส่ง **ลิงก์ซองอั่งเปา TrueMoney** มาในแชทนี้เพื่อเติมโควตาอัตโนมัติได้ทันที!"
+            f"{admin_badge}\n"
+            f"{quota_badge}\n\n"
+            "✨ <b>แพ็กเกจเติมเงิน (TrueMoney ซองอั่งเปา):</b>\n"
+            "• 🎟️ <b>50 บาท</b> = 10 ครั้งดาวน์โหลด\n"
+            "• 👑 <b>300 บาท</b> = VIP ดาวน์โหลดไม่จำกัด 7 วัน (1 สัปดาห์)!\n\n"
+            "ส่ง Telegram Link เพื่อดาวน์โหลดสื่อ หรือส่ง **ลิงก์ซองอั่งเปา TrueMoney** มาในแชทนี้เพื่อเติมเงินอัตโนมัติได้ทันที!"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🚀 เปิด Telegram MiniApp", web_app=WebAppInfo(url=webapp_url))],
-            [InlineKeyboardButton(text="🧧 วิธีเติมอั่งเปา TrueMoney", callback_data="topup_info")],
             [InlineKeyboardButton(text="🔓 Logout", callback_data="logout")]
         ])
     else:
@@ -81,7 +93,7 @@ async def command_start_handler(message: Message) -> None:
             f"👋 <b>สวัสดีครับคุณ {user_name}!</b>\n\n"
             "🤖 <b>ยินดีต้อนรับสู่ Telegram Downloader MiniApp</b>\n\n"
             "🔴 <b>Telegram Account:</b> Not Connected\n"
-            f"🎟️ <b>โควตาดาวน์โหลดคงเหลือ:</b> <code>{credits} ครั้ง</code> (ทดลองฟรี)\n\n"
+            f"{quota_badge} (ทดลองฟรี 2 ครั้ง)\n\n"
             "กรุณาเลือกช่องทางเข้าสู่ระบบด้านล่างเพื่อเริ่มใช้งานดาวน์โหลด Media:"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -96,19 +108,26 @@ async def command_start_handler(message: Message) -> None:
 async def check_credits_handler(message: Message):
     user_id = message.from_user.id
     credits = get_user_credits(user_id)
+    vip_flag = is_user_vip(user_id)
+    vip_days = get_vip_remaining_days(user_id)
+
+    if vip_flag:
+        status_text = f"👑 <b>สถานะบัญชี: VIP Unlimited (ดาวน์โหลดไม่จำกัด)</b>\n📅 <b>ระยะเวลา VIP คงเหลือ:</b> <code>{vip_days} วัน</code>"
+    else:
+        status_text = f"🎟️ <b>โควตาดาวน์โหลดคงเหลือของคุณ:</b> <code>{credits} ครั้ง</code>"
+
     await message.answer(
-        f"🎟️ <b>โควตาดาวน์โหลดคงเหลือของคุณ:</b> <code>{credits} ครั้ง</code>\n\n"
-        "🧧 <b>ต้องการเติมโควตาเพิ่ม?</b> สามารถสร้างซองอั่งเปา TrueMoney Wallet แล้วส่งลิงก์เข้ามาในแชทนี้เพื่อเติมเงินอัตโนมัติได้ทันที!",
+        f"{status_text}\n\n"
+        "🧧 <b>แพ็กเกจเติมเงิน TrueMoney Wallet:</b>\n"
+        "• 50 บาท = 10 ครั้งดาวน์โหลด\n"
+        "• 👑 <b>300 บาท = VIP ไม่จำกัด 7 วัน (1 สัปดาห์)</b>\n\n"
+        "สร้างซองอั่งเปา TrueMoney แล้วส่งลิงก์เข้ามาในแชทนี้เพื่อเปิดใช้งานอัตโนมัติได้ทันทีครับ!",
         parse_mode="HTML"
     )
 
 
 @router.message(Command("addcredits"))
 async def add_credits_handler(message: Message):
-    """
-    Admin Command: /addcredits <user_id> <amount>
-    Restricted to authorized Admin IDs only.
-    """
     user_id = message.from_user.id
     if not is_admin(user_id):
         await message.answer("⛔ <b>สิทธิ์การใช้งานปฏิเสธ:</b> เฉพาะแอดมินเท่านั้นที่สามารถเติมเครดิตได้", parse_mode="HTML")
@@ -117,16 +136,27 @@ async def add_credits_handler(message: Message):
     parts = message.text.strip().split()
     if len(parts) < 3:
         await message.answer(
-            "⚠️ <b>วิธีใช้งานคำสั่งเติมเครดิต (Admin):</b>\n\n"
-            "<code>/addcredits <Telegram_User_ID> <จำนวนครั้ง></code>\n"
-            "ตัวอย่าง: <code>/addcredits 8314575937 50</code>",
+            "⚠️ <b>วิธีใช้งานคำสั่งเติมเครดิต/VIP (Admin):</b>\n\n"
+            "• เติมครั้ง: <code>/addcredits <User_ID> <จำนวนครั้ง></code> (เช่น /addcredits 8314575937 50)\n"
+            "• เติม VIP: <code>/addcredits <User_ID> vip <จำนวนวัน></code> (เช่น /addcredits 8314575937 vip 7)",
             parse_mode="HTML"
         )
         return
 
-    try:
-        target_user_id = int(parts[1])
-        amount = int(parts[2])
+    target_user_id = int(parts[1])
+    arg2 = parts[2].lower()
+
+    if arg2 == "vip":
+        days = int(parts[3]) if len(parts) >= 4 else 7
+        add_user_vip_days(target_user_id, days)
+        await message.answer(
+            f"👑 <b>เติมสิทธิ์ VIP ไม่จำกัด สำเร็จ!</b>\n\n"
+            f"👤 <b>Telegram ID:</b> <code>{target_user_id}</code>\n"
+            f"📅 <b>เพิ่มระยะเวลา VIP:</b> <code>+{days} วัน</code>",
+            parse_mode="HTML"
+        )
+    else:
+        amount = int(arg2)
         new_balance = add_user_credits(target_user_id, amount)
         await message.answer(
             f"✅ <b>เติมเครดิตสำเร็จ!</b>\n\n"
@@ -135,46 +165,52 @@ async def add_credits_handler(message: Message):
             f"🎟️ <b>ยอดคงเหลือใหม่:</b> <code>{new_balance} ครั้ง</code>",
             parse_mode="HTML"
         )
-    except ValueError:
-        await message.answer("❌ กรุณาระบุ User ID และ จำนวนครั้งเป็นตัวเลข", parse_mode="HTML")
 
 
 @router.message(F.text.contains("gift.truemoney.com"))
 async def truemoney_angpao_handler(message: Message):
-    """
-    Automated TrueMoney Wallet Angpao Voucher Redemption Handler.
-    """
     user_id = message.from_user.id
     link = message.text.strip()
-    phone = os.getenv("TRUEMONEY_PHONE", "0800000000").strip()
+    phone = os.getenv("TRUEMONEY_PHONE", "0834274788").strip()
 
     status_msg = await message.answer("🔄 <b>กำลังตรวจสอบและรับซองอั่งเปา TrueMoney Wallet...</b>", parse_mode="HTML")
 
     success, amount, error_msg = await redeem_truemoney_angpao(phone, link)
 
     if success:
-        credits_to_add = int(amount)
-        if credits_to_add <= 0:
-            credits_to_add = 1
+        if amount >= 300:
+            vip_weeks = int(amount / 300.0)
+            vip_days = vip_weeks * 7
+            add_user_vip_days(user_id, vip_days)
+            rem_days = get_vip_remaining_days(user_id)
+            await status_msg.edit_text(
+                f"🎉 <b>ปลดล็อค VIP Unlimited สำเร็จเรียบร้อยแล้ว!</b>\n\n"
+                f"🧧 <b>ยอดซองอั่งเปา:</b> <code>{amount:.2f} บาท</code>\n"
+                f"👑 <b>ได้รับสิทธิ์ VIP ดาวน์โหลดไม่จำกัด:</b> <code>+{vip_days} วัน</code> (300 บาท/สัปดาห์)\n"
+                f"📅 <b>ระยะเวลา VIP รวมคงเหลือ:</b> <code>{rem_days} วัน</code>\n\n"
+                "เพลิดเพลินกับการดาวน์โหลดได้ไม่จำกัดครับ ✨",
+                parse_mode="HTML"
+            )
+        else:
+            credits_to_add = int(amount / 5.0)
+            if credits_to_add <= 0:
+                credits_to_add = 1
 
-        new_balance = add_user_credits(user_id, credits_to_add)
-        await status_msg.edit_text(
-            f"🎉 <b>เติมเงินสำเร็จเรียบร้อยแล้ว!</b>\n\n"
-            f"🧧 <b>ยอดซองอั่งเปา:</b> <code>{amount:.2f} บาท</code>\n"
-            f"➕ <b>โควตาที่ได้รับ:</b> <code>+{credits_to_add} ครั้ง</code>\n"
-            f"🎟️ <b>ยอดโควตาคงเหลือใหม่:</b> <code>{new_balance} ครั้ง</code>\n\n"
-            "ขอบคุณที่ใช้บริการครับ ✨",
-            parse_mode="HTML"
-        )
+            new_balance = add_user_credits(user_id, credits_to_add)
+            await status_msg.edit_text(
+                f"🎉 <b>เติมเงินสำเร็จเรียบร้อยแล้ว!</b>\n\n"
+                f"🧧 <b>ยอดซองอั่งเปา:</b> <code>{amount:.2f} บาท</code>\n"
+                f"➕ <b>โควตาที่ได้รับ:</b> <code>+{credits_to_add} ครั้ง</code> (อัตรา 50 บาท = 10 ครั้ง)\n"
+                f"🎟️ <b>ยอดโควตาคงเหลือใหม่:</b> <code>{new_balance} ครั้ง</code>\n\n"
+                "ขอบคุณที่ใช้บริการครับ ✨",
+                parse_mode="HTML"
+            )
     else:
         await status_msg.edit_text(f"❌ <b>เติมซองอั่งเปาไม่สำเร็จ:</b> {error_msg}", parse_mode="HTML")
 
 
 @router.message(F.text.contains("t.me/"))
 async def link_download_handler(message: Message):
-    """
-    Automatic Telegram Message Link Downloader Handler.
-    """
     user_id = message.from_user.id
     link = message.text.strip()
     api_id, api_hash = get_api_credentials()
@@ -184,10 +220,14 @@ async def link_download_handler(message: Message):
     update_user_profile(user_id, username=tg_username, first_name=raw_user_name)
 
     credits = get_user_credits(user_id)
-    if credits <= 0:
+    vip_flag = is_user_vip(user_id)
+
+    if not vip_flag and credits <= 0:
         await message.answer(
             "❌ <b>โควตาดาวน์โหลดของคุณหมดแล้ว! (0 ครั้ง)</b>\n\n"
-            "🧧 สามารถสร้างซองอั่งเปา TrueMoney แล้วส่งลิงก์มาในแชทนี้เพื่อเติมโควตาอัตโนมัติได้ทันทีครับ",
+            "🧧 <b>สมัครเพิ่มได้ในแชทนี้:</b>\n"
+            "• เติมตามครั้ง: 50 บาท = 10 ครั้ง\n"
+            "• 👑 <b>VIP Unlimited: 300 บาท = ดาวน์โหลดไม่จำกัด 7 วัน</b>",
             parse_mode="HTML"
         )
         return
@@ -197,19 +237,21 @@ async def link_download_handler(message: Message):
     success, file_path, filename, error_msg = await download_media_from_link(user_id, link, api_id, api_hash)
 
     if success and file_path and os.path.exists(file_path):
-        remaining = get_user_credits(user_id)
+        rem_vip = get_vip_remaining_days(user_id)
+        quota_text = f"👑 VIP Unlimited (เหลืออีก {rem_vip} วัน)" if vip_flag else f"🎟️ โควตาคงเหลือ: {get_user_credits(user_id)} ครั้ง"
+        
         await status_msg.edit_text(f"📤 <b>ดาวน์โหลดสำเร็จ! กำลังส่งไฟล์ {hd.quote(filename)} ...</b>", parse_mode="HTML")
         try:
             input_file = FSInputFile(file_path)
             await message.answer_document(
                 document=input_file,
-                caption=f"✅ <b>{hd.quote(filename)}</b>\n📥 จากลิงก์: {hd.quote(link)}\n🎟️ โควตาคงเหลือ: <code>{remaining} ครั้ง</code>",
+                caption=f"✅ <b>{hd.quote(filename)}</b>\n📥 จากลิงก์: {hd.quote(link)}\n{quota_text}",
                 parse_mode="HTML"
             )
             await status_msg.delete()
         except Exception:
             await status_msg.edit_text(
-                f"✅ <b>ดาวน์โหลดสำเร็จเรียบร้อยแล้ว!</b>\n📁 ไฟล์: <code>{hd.quote(filename)}</code>\n🎟️ โควตาคงเหลือ: <code>{remaining} ครั้ง</code>",
+                f"✅ <b>ดาวน์โหลดสำเร็จเรียบร้อยแล้ว!</b>\n📁 ไฟล์: <code>{hd.quote(filename)}</code>\n{quota_text}",
                 parse_mode="HTML"
             )
     else:

@@ -1,9 +1,10 @@
 """
 app/web/server.py - Telegram MiniApp & FastAPI Web Application
-Telegram Downloader MiniApp UI & REST API
+Telegram Downloader MiniApp UI & REST API (Vercel Serverless Safe)
 """
 
 import os
+import tempfile
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +42,17 @@ def get_api_credentials():
     except ValueError:
         api_id = 0
     return api_id, api_hash
+
+
+def get_downloads_dir() -> Path:
+    try:
+        d = Path("downloads")
+        d.mkdir(exist_ok=True)
+        return d
+    except (OSError, PermissionError):
+        d = Path(tempfile.gettempdir()) / "telegram_downloads"
+        d.mkdir(exist_ok=True)
+        return d
 
 
 class SendOtpRequest(BaseModel):
@@ -143,8 +155,7 @@ async def create_download(req: DownloadRequest):
 
 @app.get("/api/downloads")
 async def list_downloads():
-    downloads_dir = Path("downloads")
-    downloads_dir.mkdir(exist_ok=True)
+    downloads_dir = get_downloads_dir()
     files = []
     for f in downloads_dir.iterdir():
         if f.is_file() and f.name != ".gitkeep":

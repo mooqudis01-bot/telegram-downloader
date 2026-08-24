@@ -1,24 +1,36 @@
 """
-app/telegram/auth.py - Telethon User Authentication Service
+app/telegram/auth.py - Telethon User Authentication Service (Vercel Read-Only FS Safe)
 """
 
 import os
+import tempfile
 from pathlib import Path
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError
 
-SESSIONS_DIR = Path("sessions")
-SESSIONS_DIR.mkdir(exist_ok=True)
+
+def get_sessions_dir() -> Path:
+    """Returns writable sessions directory (falls back to /tmp for Vercel/Lambda)."""
+    try:
+        d = Path("sessions")
+        d.mkdir(exist_ok=True)
+        return d
+    except (OSError, PermissionError):
+        d = Path(tempfile.gettempdir()) / "telegram_sessions"
+        d.mkdir(exist_ok=True)
+        return d
 
 
 def get_user_session_path(user_id: int) -> str:
     """Returns the file path for user's Telethon session (without .session extension)."""
-    return str(SESSIONS_DIR / f"telegram_user_{user_id}")
+    sessions_dir = get_sessions_dir()
+    return str(sessions_dir / f"telegram_user_{user_id}")
 
 
 def get_session_file(user_id: int) -> Path:
     """Returns Path object for user's session file."""
-    return SESSIONS_DIR / f"telegram_user_{user_id}.session"
+    sessions_dir = get_sessions_dir()
+    return sessions_dir / f"telegram_user_{user_id}.session"
 
 
 def is_user_logged_in(user_id: int) -> bool:

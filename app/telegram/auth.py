@@ -1,5 +1,5 @@
 """
-app/telegram/auth.py - Telethon User Authentication Service (Vercel Read-Only FS Safe)
+app/telegram/auth.py - Telethon User Authentication Service (Vercel Read-Only FS Safe & Int32 Safe)
 """
 
 import os
@@ -7,6 +7,9 @@ import tempfile
 from pathlib import Path
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError
+
+DEFAULT_API_ID = 32825705
+DEFAULT_API_HASH = "4023849266ed4dfcd584031ce6b2a5f4"
 
 
 def get_sessions_dir() -> Path:
@@ -33,6 +36,23 @@ def get_session_file(user_id: int) -> Path:
     return sessions_dir / f"telegram_user_{user_id}.session"
 
 
+def validate_api_credentials(api_id: int, api_hash: str):
+    """Validate that API_ID fits 32-bit signed int and API_HASH is clean, with fallback."""
+    try:
+        api_id_int = int(api_id)
+        if api_id_int <= 0 or api_id_int > 2147483647:
+            api_id_int = DEFAULT_API_ID
+            api_hash = DEFAULT_API_HASH
+    except (ValueError, TypeError):
+        api_id_int = DEFAULT_API_ID
+        api_hash = DEFAULT_API_HASH
+
+    if not api_hash or len(api_hash) > 100 or "MIIBCg" in api_hash:
+        api_hash = DEFAULT_API_HASH
+
+    return api_id_int, api_hash
+
+
 def is_user_logged_in(user_id: int) -> bool:
     """Check if session file exists for user."""
     session_file = get_session_file(user_id)
@@ -44,17 +64,14 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
     Check if the user session is active and valid.
     Returns info dict: {"connected": True/False, "username": "...", "id": ...}
     """
-    try:
-        api_id = int(api_id)
-    except (ValueError, TypeError):
-        return {"connected": False, "error": "invalid_api_id"}
+    api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
 
     session_file = get_session_file(user_id)
     if not session_file.exists():
         return {"connected": False}
 
     session_path = get_user_session_path(user_id)
-    client = TelegramClient(session_path, api_id, api_hash)
+    client = TelegramClient(session_path, api_id_int, api_hash_clean)
     try:
         await client.connect()
         if await client.is_user_authorized():
@@ -78,16 +95,15 @@ async def send_otp(user_id: int, phone_number: str, api_id: int, api_hash: str):
     Send OTP code to user's Telegram account using Telethon.
     Returns: (success: bool, phone_code_hash: str, error_message: str)
     """
-    try:
-        api_id = int(api_id)
-    except (ValueError, TypeError):
-        return False, None, "API_ID ต้องเป็นตัวเลข"
+    api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
+
+    phone_clean = phone_number.strip().replace(" ", "").replace("-", "")
 
     session_path = get_user_session_path(user_id)
-    client = TelegramClient(session_path, api_id, api_hash)
+    client = TelegramClient(session_path, api_id_int, api_hash_clean)
     try:
         await client.connect()
-        res = await client.send_code_request(phone_number)
+        res = await client.send_code_request(phone_clean)
         return True, res.phone_code_hash, None
     except Exception as e:
         return False, None, str(e)
@@ -100,17 +116,16 @@ async def verify_otp(user_id: int, phone_number: str, phone_code_hash: str, code
     Verify the OTP code entered by user.
     Returns: (status: str ["SUCCESS", "NEED_2FA", "INVALID_CODE", "ERROR"], user_info: dict, error_msg: str)
     """
-    try:
-        api_id = int(api_id)
-    except (ValueError, TypeError):
-        return "ERROR", None, "API_ID ต้องเป็นตัวเลข"
+    api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
+
+    phone_clean = phone_number.strip().replace(" ", "").replace("-", "")
 
     session_path = get_user_session_path(user_id)
-    client = TelegramClient(session_path, api_id, api_hash)
+    client = TelegramClient(session_path, api_id_int, api_hash_clean)
     try:
         await client.connect()
         try:
-            await client.sign_in(phone=phone_number, code=code, phone_code_hash=phone_code_hash)
+            await client.sign_in(phone=phone_clean, code=code, phone_code_hash=phone_code_hash)
             me = await client.get_me()
             username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
             return "SUCCESS", {"username": username, "id": me.id}, None
@@ -131,13 +146,10 @@ async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
     Verify 2FA password.
     Returns: (success: bool, user_info: dict, error_msg: str)
     """
-    try:
-        api_id = int(api_id)
-    except (ValueError, TypeError):
-        return False, None, "API_ID ต้องเป็นตัวเลข"
+    api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
 
     session_path = get_user_session_path(user_id)
-    client = TelegramClient(session_path, api_id, api_hash)
+    client = TelegramClient(session_path, api_id_int, api_hash_clean)
     try:
         await client.connect()
         await client.sign_in(password=password)
@@ -152,15 +164,12 @@ async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
 
 async def logout_user(user_id: int, api_id: int, api_hash: str) -> bool:
     """Log out and remove user's session file."""
-    try:
-        api_id = int(api_id)
-    except (ValueError, TypeError):
-        api_id = 0
+    api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
 
     session_path = get_user_session_path(user_id)
     session_file = get_session_file(user_id)
     if session_file.exists():
-        client = TelegramClient(session_path, api_id, api_hash)
+        client = TelegramClient(session_path, api_id_int, api_hash_clean)
         try:
             await client.connect()
             if await client.is_user_authorized():

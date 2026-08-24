@@ -1,6 +1,6 @@
 """
 app/web/server.py - Telegram MiniApp & FastAPI Web Application
-Telegram Downloader MiniApp UI & REST API (Vercel Serverless Safe)
+Telegram Downloader MiniApp UI & REST API (Vercel Serverless Safe & Fallback Safe)
 """
 
 import os
@@ -33,14 +33,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+DEFAULT_API_ID = 32825705
+DEFAULT_API_HASH = "4023849266ed4dfcd584031ce6b2a5f4"
+
 
 def get_api_credentials():
     api_id_str = os.getenv("API_ID", "").strip()
     api_hash = os.getenv("API_HASH", "").strip()
     try:
         api_id = int(api_id_str)
+        if api_id <= 0 or api_id > 2147483647:
+            api_id = DEFAULT_API_ID
+            api_hash = DEFAULT_API_HASH
     except ValueError:
-        api_id = 0
+        api_id = DEFAULT_API_ID
+        api_hash = DEFAULT_API_HASH
+
+    if not api_hash or len(api_hash) > 100 or "MIIBCg" in api_hash:
+        api_hash = DEFAULT_API_HASH
+
     return api_id, api_hash
 
 
@@ -84,8 +95,6 @@ class DownloadRequest(BaseModel):
 @app.get("/api/auth/status/{user_id}")
 async def auth_status(user_id: int):
     api_id, api_hash = get_api_credentials()
-    if not api_id or not api_hash:
-        return {"connected": False, "error": "API credentials missing in .env"}
     res = await check_user_session(user_id, api_id, api_hash)
     return res
 
@@ -93,9 +102,6 @@ async def auth_status(user_id: int):
 @app.post("/api/auth/send-otp")
 async def api_send_otp(req: SendOtpRequest):
     api_id, api_hash = get_api_credentials()
-    if not api_id or not api_hash:
-        raise HTTPException(status_code=400, detail="API_ID หรือ API_HASH ไม่ถูกต้องใน .env")
-    
     success, phone_code_hash, error_msg = await send_otp(req.user_id, req.phone, api_id, api_hash)
     if success:
         return {"success": True, "phone_code_hash": phone_code_hash}
@@ -106,9 +112,6 @@ async def api_send_otp(req: SendOtpRequest):
 @app.post("/api/auth/verify-otp")
 async def api_verify_otp(req: VerifyOtpRequest):
     api_id, api_hash = get_api_credentials()
-    if not api_id or not api_hash:
-        raise HTTPException(status_code=400, detail="API_ID หรือ API_HASH ไม่ถูกต้อง")
-
     status, user_info, error_msg = await verify_otp(
         req.user_id, req.phone, req.phone_code_hash, req.code, api_id, api_hash
     )
@@ -124,9 +127,6 @@ async def api_verify_otp(req: VerifyOtpRequest):
 @app.post("/api/auth/verify-2fa")
 async def api_verify_2fa(req: Verify2faRequest):
     api_id, api_hash = get_api_credentials()
-    if not api_id or not api_hash:
-        raise HTTPException(status_code=400, detail="API_ID หรือ API_HASH ไม่ถูกต้อง")
-
     success, user_info, error_msg = await verify_2fa(req.user_id, req.password, api_id, api_hash)
     if success:
         return {"success": True, "user": user_info}
@@ -280,6 +280,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
 
         .alert {
             padding: 12px 14px; border-radius: 12px; font-size: 13px; margin-bottom: 16px; display: none;
+            word-break: break-word;
         }
         .alert-danger { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; }
         .alert-success { background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.3); color: #86efac; }
@@ -497,7 +498,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
 
         async function handleSendOtp() {
             const userId = document.getElementById('user-id-input').value.trim();
-            const phone = document.getElementById('phone-input').value.trim();
+            const rawPhone = document.getElementById('phone-input').value.trim();
+            const phone = rawPhone.replace(/\\s+/g, '').replace(/-/g, '');
+
             if (!userId || !phone) { showAlert('กรุณาระบุ Telegram User ID และ เบอร์โทรศัพท์'); return; }
 
             currentUserId = userId;
@@ -662,4 +665,11 @@ MINIAPP_HTML = """<!DOCTYPE html>
 @app.get("/login", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 async def miniapp_page():
+    return HTMLResponse(content=MINIAPP_HTML, status_code=200)
+
+
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def catch_all_page(full_path: str):
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API endpoint not found")
     return HTMLResponse(content=MINIAPP_HTML, status_code=200)

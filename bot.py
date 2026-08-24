@@ -40,7 +40,7 @@ async def start_bot_async():
         print("[ERROR] BOT_TOKEN is missing or not configured in .env!")
         return
 
-    webapp_url = os.getenv("WEBAPP_URL", "http://localhost:8000/miniapp").strip()
+    webapp_url = os.getenv("WEBAPP_URL", "https://telegram-downloader-nggk.vercel.app/miniapp").strip()
 
     # Initialize Bot & Dispatcher with ParseMode.HTML
     bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -68,7 +68,7 @@ async def start_bot_async():
             )
             print(f"[INFO] Telegram Menu Button configured: {webapp_url}")
         except Exception as e:
-            print(f"[NOTICE] Could not set menu button (URL must be HTTPS for official Telegram menu button): {e}")
+            print(f"[NOTICE] Could not set menu button: {e}")
 
         print(f"[INFO] Telegram Bot polling started")
         

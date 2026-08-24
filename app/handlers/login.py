@@ -31,7 +31,7 @@ def get_api_credentials():
 
 
 def get_webapp_url():
-    return os.getenv("WEBAPP_URL", "http://localhost:8000/miniapp").strip()
+    return os.getenv("WEBAPP_URL", "https://telegram-downloader-nggk.vercel.app/miniapp").strip()
 
 
 def get_connected_keyboard():

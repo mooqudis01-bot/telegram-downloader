@@ -1,14 +1,14 @@
 """
-app/handlers/start.py - Start Command & Link Handler for aiogram 3.x with Telegram Media Downloading
+app/handlers/start.py - Start Command, Admin Credit Management & Link Handler for aiogram 3.x
 """
 
 import os
 from aiogram import Router, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, FSInputFile
 from aiogram.utils.markdown import html_decoration as hd
 
-from app.telegram.auth import check_user_session
+from app.telegram.auth import check_user_session, get_user_credits, add_user_credits, is_admin
 from app.telegram.media import download_media_from_link
 
 router = Router()
@@ -42,7 +42,7 @@ def get_webapp_url():
 @router.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
     """
-    Handler for /start command - Displays status, Chat Login, and Telegram MiniApp.
+    Handler for /start command - Displays status, credits, Chat Login, and Telegram MiniApp.
     """
     user_id = message.from_user.id
     raw_user_name = message.from_user.full_name if message.from_user else "User"
@@ -52,14 +52,19 @@ async def command_start_handler(message: Message) -> None:
     webapp_url = get_webapp_url()
 
     session_info = await check_user_session(user_id, api_id, api_hash)
+    credits = get_user_credits(user_id)
+    admin_flag = is_admin(user_id)
 
     if session_info.get("connected"):
         username = hd.quote(session_info.get("username", user_name))
+        admin_badge = "\n👑 <b>Role:</b> System Admin\n" if admin_flag else ""
         text = (
             f"👋 <b>สวัสดีครับคุณ {user_name}!</b>\n\n"
             "🤖 <b>ยินดีต้อนรับสู่ Telegram Downloader MiniApp</b>\n\n"
             f"🟢 <b>Telegram Account:</b> Connected (<code>{username}</code>)\n"
-            f"📱 <b>Telegram ID:</b> <code>{user_id}</code>\n\n"
+            f"📱 <b>Telegram ID:</b> <code>{user_id}</code>"
+            f"{admin_badge}"
+            f"🎟️ <b>โควตาดาวน์โหลดคงเหลือ:</b> <code>{credits} ครั้ง</code>\n\n"
             "✨ ระบบพร้อมใช้งานแล้ว! คุณสามารถส่ง Telegram Message Link มาในแชทนี้เพื่อดาวน์โหลด Media ได้ทันที"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -71,7 +76,8 @@ async def command_start_handler(message: Message) -> None:
         text = (
             f"👋 <b>สวัสดีครับคุณ {user_name}!</b>\n\n"
             "🤖 <b>ยินดีต้อนรับสู่ Telegram Downloader MiniApp</b>\n\n"
-            "🔴 <b>Telegram Account:</b> Not Connected\n\n"
+            "🔴 <b>Telegram Account:</b> Not Connected\n"
+            f"🎟️ <b>โควตาดาวน์โหลดคงเหลือ:</b> <code>{credits} ครั้ง</code> (ทดลองฟรี)\n\n"
             "กรุณาเลือกช่องทางเข้าสู่ระบบด้านล่างเพื่อเริ่มใช้งานดาวน์โหลด Media:"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -80,6 +86,53 @@ async def command_start_handler(message: Message) -> None:
         ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@router.message(Command("credits"))
+async def check_credits_handler(message: Message):
+    user_id = message.from_user.id
+    credits = get_user_credits(user_id)
+    await message.answer(
+        f"🎟️ <b>โควตาดาวน์โหลดคงเหลือของคุณ:</b> <code>{credits} ครั้ง</code>\n\n"
+        "หากโควตาหมด กรุณาติดต่อแอดมินเพื่อเติมเครดิตครับ",
+        parse_mode="HTML"
+    )
+
+
+@router.message(Command("addcredits"))
+async def add_credits_handler(message: Message):
+    """
+    Admin Command: /addcredits <user_id> <amount>
+    Restricted to authorized Admin IDs only.
+    """
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        await message.answer("⛔ <b>สิทธิ์การใช้งานปฏิเสธ:</b> เฉพาะแอดมินเท่านั้นที่สามารถเติมเครดิตได้", parse_mode="HTML")
+        return
+
+    parts = message.text.strip().split()
+    if len(parts) < 3:
+        await message.answer(
+            "⚠️ <b>วิธีใช้งานคำสั่งเติมเครดิต (Admin):</b>\n\n"
+            "<code>/addcredits <Telegram_User_ID> <จำนวนครั้ง></code>\n"
+            "ตัวอย่าง: <code>/addcredits 8314575937 50</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        target_user_id = int(parts[1])
+        amount = int(parts[2])
+        new_balance = add_user_credits(target_user_id, amount)
+        await message.answer(
+            f"✅ <b>เติมเครดิตสำเร็จ!</b>\n\n"
+            f"👤 <b>Telegram ID:</b> <code>{target_user_id}</code>\n"
+            f"➕ <b>จำนวนที่เติม:</b> <code>+{amount} ครั้ง</code>\n"
+            f"🎟️ <b>ยอดคงเหลือใหม่:</b> <code>{new_balance} ครั้ง</code>",
+            parse_mode="HTML"
+        )
+    except ValueError:
+        await message.answer("❌ กรุณาระบุ User ID และ จำนวนครั้งเป็นตัวเลข", parse_mode="HTML")
 
 
 @router.message(F.text.contains("t.me/"))
@@ -91,23 +144,33 @@ async def link_download_handler(message: Message):
     link = message.text.strip()
     api_id, api_hash = get_api_credentials()
 
+    credits = get_user_credits(user_id)
+    if credits <= 0:
+        await message.answer(
+            "❌ <b>โควตาดาวน์โหลดของคุณหมดแล้ว! (0 ครั้ง)</b>\n\n"
+            "กรุณาติดต่อแอดมินเพื่อเติมเครดิตก่อนดาวน์โหลดเพิ่มเติมครับ",
+            parse_mode="HTML"
+        )
+        return
+
     status_msg = await message.answer("🔄 <b>กำลังดึงข้อมูลและดาวน์โหลด Media จาก Telegram...</b>", parse_mode="HTML")
 
     success, file_path, filename, error_msg = await download_media_from_link(user_id, link, api_id, api_hash)
 
     if success and file_path and os.path.exists(file_path):
+        remaining = get_user_credits(user_id)
         await status_msg.edit_text(f"📤 <b>ดาวน์โหลดสำเร็จ! กำลังส่งไฟล์ {hd.quote(filename)} ...</b>", parse_mode="HTML")
         try:
             input_file = FSInputFile(file_path)
             await message.answer_document(
                 document=input_file,
-                caption=f"✅ <b>{hd.quote(filename)}</b>\n📥 จากลิงก์: {hd.quote(link)}",
+                caption=f"✅ <b>{hd.quote(filename)}</b>\n📥 จากลิงก์: {hd.quote(link)}\n🎟️ โควตาคงเหลือ: <code>{remaining} ครั้ง</code>",
                 parse_mode="HTML"
             )
             await status_msg.delete()
         except Exception:
             await status_msg.edit_text(
-                f"✅ <b>ดาวน์โหลดสำเร็จเรียบร้อยแล้ว!</b>\n📁 ไฟล์: <code>{hd.quote(filename)}</code>",
+                f"✅ <b>ดาวน์โหลดสำเร็จเรียบร้อยแล้ว!</b>\n📁 ไฟล์: <code>{hd.quote(filename)}</code>\n🎟️ โควตาคงเหลือ: <code>{remaining} ครั้ง</code>",
                 parse_mode="HTML"
             )
     else:

@@ -1,24 +1,34 @@
 """
 app/web/server.py - Telegram MiniApp & FastAPI Web Application
-Telegram Downloader MiniApp UI & REST API (Vercel Serverless Safe & Fallback Safe)
+Telegram Downloader MiniApp UI, REST API & Webhook Service (100% Vercel Serverless Compatible & Admin Security)
 """
 
 import os
 import tempfile
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
+
+from aiogram import Bot, Dispatcher
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
+from aiogram.types import Update, MenuButtonWebApp, WebAppInfo
 
 from app.telegram.auth import (
     check_user_session,
     send_otp,
     verify_otp,
     verify_2fa,
-    logout_user
+    logout_user,
+    get_user_credits,
+    add_user_credits,
+    is_admin,
+    get_all_users_list
 )
 from app.telegram.media import download_media_from_link
+from app.handlers import start_router, login_router
 
 app = FastAPI(
     title="Telegram Downloader MiniApp",
@@ -36,6 +46,13 @@ app.add_middleware(
 
 DEFAULT_API_ID = 32825705
 DEFAULT_API_HASH = "4023849266ed4dfcd584031ce6b2a5f4"
+
+# Global Aiogram Bot & Dispatcher for Webhook
+bot_token = os.getenv("BOT_TOKEN", "8890827538:AAFVZqr1uIzYZIsscQ4ie2pS3uLcXrbEUdU").strip()
+bot_instance = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp_instance = Dispatcher()
+dp_instance.include_router(start_router)
+dp_instance.include_router(login_router)
 
 
 def get_api_credentials():
@@ -101,10 +118,73 @@ class DownloadRequest(BaseModel):
     link: str
 
 
+class AdminAddCreditsRequest(BaseModel):
+    admin_id: int
+    target_user_id: int
+    amount: int
+
+
+@app.post("/api/webhook")
+async def telegram_webhook(request: Request):
+    """
+    100% Vercel Serverless Webhook Endpoint for Telegram Bot.
+    """
+    try:
+        data = await request.json()
+        update = Update.model_validate(data, context={"bot": bot_instance})
+        await dp_instance.feed_webhook_update(bot_instance, update)
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
+@app.get("/api/set-webhook")
+async def setup_webhook():
+    """
+    Endpoint to register Telegram Webhook on Vercel.
+    """
+    webapp_url = os.getenv("WEBAPP_URL", "https://telegram-downloader-nggk.vercel.app/miniapp").strip()
+    base_url = webapp_url.replace("/miniapp", "").rstrip("/")
+    webhook_url = f"{base_url}/api/webhook"
+    
+    try:
+        await bot_instance.delete_webhook(drop_pending_updates=True)
+        await bot_instance.set_webhook(url=webhook_url)
+        await bot_instance.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(text="📱 เปิด MiniApp", web_app=WebAppInfo(url=webapp_url))
+        )
+        return {"success": True, "webhook_url": webhook_url, "miniapp_url": webapp_url}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/users")
+async def admin_get_users(admin_id: int):
+    if not is_admin(admin_id):
+        raise HTTPException(status_code=403, detail="⛔ สิทธิ์การใช้งานปฏิเสธ: เฉพาะแอดมินเท่านั้น")
+    users = get_all_users_list()
+    return {"success": True, "users": users}
+
+
+@app.post("/api/admin/add-credits")
+async def admin_add_credits(req: AdminAddCreditsRequest):
+    if not is_admin(req.admin_id):
+        raise HTTPException(status_code=403, detail="⛔ สิทธิ์การใช้งานปฏิเสธ: เฉพาะแอดมินเท่านั้น")
+    new_credits = add_user_credits(req.target_user_id, req.amount)
+    return {
+        "success": True,
+        "message": f"เติมเครดิตให้ {req.target_user_id} จำนวน +{req.amount} ครั้งเรียบร้อย",
+        "target_user_id": req.target_user_id,
+        "new_credits": new_credits
+    }
+
+
 @app.get("/api/auth/status/{user_id}")
 async def auth_status(user_id: int):
     api_id, api_hash = get_api_credentials()
     res = await check_user_session(user_id, api_id, api_hash)
+    res["credits"] = get_user_credits(user_id)
+    res["is_admin"] = is_admin(user_id)
     return res
 
 
@@ -168,11 +248,13 @@ async def create_download(req: DownloadRequest):
     success, file_path, filename, error_msg = await download_media_from_link(req.user_id, req.link, api_id, api_hash)
 
     if success:
+        remaining = get_user_credits(req.user_id)
         return {
             "success": True,
             "message": f"ดาวน์โหลดสำเร็จ! ไฟล์: {filename}",
             "filename": filename,
             "link": req.link,
+            "credits_remaining": remaining,
             "status": "completed"
         }
     else:
@@ -191,6 +273,15 @@ async def list_downloads():
                 "path": str(f)
             })
     return {"files": files}
+
+
+@app.get("/api/downloads/{filename}")
+async def get_downloaded_file(filename: str):
+    downloads_dir = get_downloads_dir()
+    file_path = downloads_dir / filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path=str(file_path), filename=filename)
 
 
 MINIAPP_HTML = """<!DOCTYPE html>
@@ -239,11 +330,11 @@ MINIAPP_HTML = """<!DOCTYPE html>
         }
         .tab-btn {
             flex: 1;
-            padding: 10px 8px;
+            padding: 10px 6px;
             border: none;
             background: transparent;
             color: #94a3b8;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 600;
             border-radius: 12px;
             cursor: pointer;
@@ -251,7 +342,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 6px;
+            gap: 4px;
         }
         .tab-btn.active {
             background: var(--accent-gradient);
@@ -303,6 +394,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
             background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4);
             color: #fca5a5; box-shadow: none; margin-top: 10px;
         }
+        .btn-sm {
+            padding: 6px 12px; font-size: 12px; border-radius: 8px; width: auto; box-shadow: none;
+        }
 
         .alert {
             padding: 12px 14px; border-radius: 12px; font-size: 13px; margin-bottom: 16px; display: none;
@@ -339,6 +433,12 @@ MINIAPP_HTML = """<!DOCTYPE html>
         .file-name { font-size: 13px; color: white; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
         .file-size { font-size: 11px; color: #94a3b8; }
 
+        .user-row {
+            display: flex; align-items: center; justify-content: space-between;
+            background: rgba(15, 23, 42, 0.5); padding: 12px; border-radius: 12px;
+            border: 1px solid var(--border-color); margin-bottom: 8px; font-size: 13px;
+        }
+
         .spinner {
             width: 18px; height: 18px; border: 2.5px solid rgba(255,255,255,0.3);
             border-radius: 50%; border-top-color: white; animation: spin 0.8s linear infinite; display: none;
@@ -358,6 +458,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
             </button>
             <button class="tab-btn" onclick="switchTab('files', event)">
                 📁 <span>Files</span>
+            </button>
+            <button class="tab-btn" id="admin-tab-btn" style="display: none;" onclick="switchTab('admin', event)">
+                👑 <span>Admin</span>
             </button>
         </div>
 
@@ -420,6 +523,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
                         <div class="avatar" id="dash-avatar">TG</div>
                         <h2 style="font-size: 18px; color: white;" id="dash-name">@username</h2>
                         <p style="font-size: 12px; color: #94a3b8; margin-top: 2px;" id="dash-id">ID: 000000</p>
+                        <p style="font-size: 13px; color: #818cf8; margin-top: 6px; font-weight: 600;" id="dash-credits">🎟️ โควตาคงเหลือ: 5 ครั้ง</p>
                         <div class="status-badge">🟢 Telegram Account: Connected</div>
                     </div>
                     <button class="btn btn-danger" onclick="handleLogout()">
@@ -456,6 +560,34 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 </div>
             </div>
         </div>
+
+        <!-- TAB 4: ADMIN DASHBOARD -->
+        <div id="tab-admin" class="tab-content">
+            <div class="glass-card">
+                <h2 class="header-title">👑 Admin Control Panel</h2>
+                <p class="header-sub">จัดการโควตาดาวน์โหลดและเติมเครดิตให้ผู้ใช้ระบบ</p>
+                
+                <div style="background: rgba(15,23,42,0.6); padding: 14px; border-radius: 12px; margin-bottom: 16px; border: 1px solid var(--border-color);">
+                    <h3 style="font-size: 14px; color: white; margin-bottom: 8px;">➕ เติมโควตาดาวน์โหลดให้ลูกค้า</h3>
+                    <div class="form-group">
+                        <label>Telegram User ID ลูกค้า</label>
+                        <input type="text" id="admin-target-id" placeholder="ระบุ Telegram User ID เช่น 8314575937">
+                    </div>
+                    <div class="form-group">
+                        <label>จำนวนโควตาที่ต้องการเติม (ครั้ง)</label>
+                        <input type="number" id="admin-amount" placeholder="เช่น 50">
+                    </div>
+                    <button class="btn" onclick="handleAdminAddCredits()">
+                        <span>ยืนยันการเติมโควตา</span>
+                    </button>
+                </div>
+
+                <h3 style="font-size: 14px; color: white; margin-bottom: 8px;">👥 รายชื่อผู้ใช้และโควตาคงเหลือ</h3>
+                <div id="admin-users-list">
+                    <p style="font-size: 13px; color: #94a3b8; text-align: center;">กำลังโหลดรายชื่อผู้ใช้...</p>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -486,6 +618,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
             document.getElementById('tab-' + tabName).classList.add('active');
 
             if (tabName === 'files') { loadFiles(); }
+            if (tabName === 'admin') { loadAdminUsers(); }
         }
 
         function showAlert(msg, isError = true) {
@@ -513,13 +646,84 @@ MINIAPP_HTML = """<!DOCTYPE html>
             try {
                 const res = await fetch('/api/auth/status/' + userId);
                 const data = await res.json();
+                
+                if (data.is_admin) {
+                    document.getElementById('admin-tab-btn').style.display = 'flex';
+                }
+
                 if (data.connected) {
                     document.getElementById('dash-name').innerText = data.username || 'Connected User';
                     document.getElementById('dash-id').innerText = 'ID: ' + (data.id || userId);
+                    document.getElementById('dash-credits').innerText = '🎟️ โควตาคงเหลือ: ' + (data.credits ?? 5) + ' ครั้ง';
                     document.getElementById('dash-avatar').innerText = (data.username || 'TG').replace('@','').substring(0,2).toUpperCase();
                     showAuthStep(4);
                 }
             } catch (e) {}
+        }
+
+        async function handleAdminAddCredits() {
+            const targetId = document.getElementById('admin-target-id').value.trim();
+            const amount = document.getElementById('admin-amount').value.trim();
+
+            if (!targetId || !amount) {
+                showAlert('กรุณาระบุ Telegram User ID และ จำนวนโควตา');
+                return;
+            }
+
+            hideAlert();
+            try {
+                const res = await fetch('/api/admin/add-credits', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        admin_id: parseInt(currentUserId),
+                        target_user_id: parseInt(targetId),
+                        amount: parseInt(amount)
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showAlert(data.message, false);
+                    document.getElementById('admin-target-id').value = '';
+                    document.getElementById('admin-amount').value = '';
+                    loadAdminUsers();
+                } else {
+                    showAlert(data.detail || 'ไม่สามารถเติมเครดิตได้');
+                }
+            } catch (e) {
+                showAlert('เกิดข้อผิดพลาดในการเติมเครดิต');
+            }
+        }
+
+        async function loadAdminUsers() {
+            const listEl = document.getElementById('admin-users-list');
+            try {
+                const res = await fetch('/api/admin/users?admin_id=' + currentUserId);
+                const data = await res.json();
+                if (res.ok && data.users) {
+                    listEl.innerHTML = data.users.map(u => `
+                        <div class="user-row">
+                            <div>
+                                <div style="font-weight:600; color:white;">ID: ${u.user_id} ${u.is_admin ? '👑' : ''}</div>
+                                <div style="font-size:11px; color:#94a3b8;">ดาวน์โหลดแล้ว: ${u.download_count} ครั้ง</div>
+                            </div>
+                            <div style="text-align:right;">
+                                <div style="color:#818cf8; font-weight:700;">🎟️ ${u.credits} ครั้ง</div>
+                                <button class="btn btn-sm" onclick="quickFillTarget('${u.user_id}')" style="margin-top:4px; padding:4px 8px; font-size:10px;">➕ เติมโควตา</button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    listEl.innerHTML = '<p style="font-size: 13px; color: #fca5a5; text-align: center;">คุณไม่มีสิทธิ์เข้าถึง Admin Panel</p>';
+                }
+            } catch (e) {
+                listEl.innerHTML = '<p style="font-size: 13px; color: #fca5a5; text-align: center;">เกิดข้อผิดพลาดในการโหลดข้อมูล</p>';
+            }
+        }
+
+        function quickFillTarget(uid) {
+            document.getElementById('admin-target-id').value = uid;
+            document.getElementById('admin-amount').focus();
         }
 
         async function handleSendOtp() {
@@ -661,8 +865,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
                 setLoading('dl', false);
                 if (res.ok && data.success) {
-                    showAlert('ดาวน์โหลดสำเร็จ! ไฟล์: ' + (data.filename || ''), false);
+                    showAlert('ดาวน์โหลดสำเร็จ! ไฟล์: ' + (data.filename || '') + ' (คงเหลือ ' + (data.credits_remaining ?? '') + ' ครั้ง)', false);
                     document.getElementById('link-input').value = '';
+                    checkLoginStatus(currentUserId);
                 } else {
                     const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
                     showAlert('ดาวน์โหลดไม่สำเร็จ: ' + errDetail);
@@ -685,7 +890,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
                                 <div class="file-name">${f.name}</div>
                                 <div class="file-size">${(f.size / (1024*1024)).toFixed(2)} MB</div>
                             </div>
-                            <span style="font-size: 12px; color: #4ade80;">Completed</span>
+                            <a href="/api/downloads/${encodeURIComponent(f.name)}" download target="_blank" style="padding: 6px 12px; background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.4); border-radius: 8px; color: #818cf8; font-size: 12px; font-weight: 600; text-decoration: none;">📥 ดาวน์โหลด</a>
                         </div>
                     `).join('');
                 } else {

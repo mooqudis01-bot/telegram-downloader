@@ -1,5 +1,5 @@
 """
-app/telegram/media.py - Telethon Telegram Media Downloader Service
+app/telegram/media.py - Telethon Telegram Media Downloader Service (Quota Credit Enabled)
 """
 
 import os
@@ -8,21 +8,17 @@ import asyncio
 import tempfile
 from pathlib import Path
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 
 from app.telegram.auth import (
-    get_user_session_path,
-    get_session_file,
-    validate_api_credentials
+    get_user_session_string,
+    validate_api_credentials,
+    get_user_credits,
+    deduct_user_credit
 )
 
 
 def parse_telegram_link(link: str):
-    """
-    Parse Telegram link formats:
-    - https://t.me/c/1234567890/500 -> chat_id: -1001234567890, msg_id: 500
-    - https://t.me/channel_name/500 -> chat: "channel_name", msg_id: 500
-    Returns (chat_entity, msg_id) or (None, None)
-    """
     if not link:
         return None, None
 
@@ -66,21 +62,25 @@ def get_downloads_dir() -> Path:
 
 async def download_media_from_link(user_id: int, link: str, api_id: int, api_hash: str, progress_callback=None):
     """
-    Download media from a Telegram message link using user's Telethon session.
+    Download media from a Telegram message link using user's Telethon StringSession.
+    Deducts 1 credit upon success.
     Returns: (success: bool, file_path: str, filename: str, error_msg: str)
     """
+    # Check download credits first
+    credits = get_user_credits(user_id)
+    if credits <= 0:
+        return False, None, None, "❌ โควตาดาวน์โหลดของคุณหมดแล้ว! (0 ครั้ง) กรุณาติดต่อแอดมินเพื่อเติมโควดาดาวน์โหลด"
+
     chat_entity, msg_id = parse_telegram_link(link)
     if not chat_entity or not msg_id:
         return False, None, None, "รูปแบบลิงก์ Telegram ไม่ถูกต้อง! ตัวอย่าง: https://t.me/c/123456789/100 หรือ https://t.me/channel/100"
 
-    session_file = get_session_file(user_id)
-    if not session_file.exists():
+    session_str = get_user_session_string(user_id)
+    if not session_str:
         return False, None, None, "คุณยังไม่ได้เข้าสู่ระบบ Telegram Account กรุณา Login ในหน้า MiniApp หรือสั่ง /start เพื่อ Login ก่อน"
 
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
-    session_path = get_user_session_path(user_id)
-
-    client = TelegramClient(session_path, api_id_int, api_hash_clean)
+    client = TelegramClient(StringSession(session_str), api_id_int, api_hash_clean)
     try:
         await asyncio.wait_for(client.connect(), timeout=10.0)
 
@@ -96,11 +96,14 @@ async def download_media_from_link(user_id: int, link: str, api_id: int, api_has
             return False, None, None, "ข้อความตามลิงก์ดังกล่าวไม่มีรูปภาพ วิดีโอ หรือไฟล์สื่อสำหรับดาวน์โหลด"
 
         downloads_dir = get_downloads_dir()
-        
         file_path = await client.download_media(message, file=str(downloads_dir), progress_callback=progress_callback)
         
         if file_path and os.path.exists(file_path):
             filename = os.path.basename(file_path)
+            
+            # Deduct 1 credit upon successful download
+            deduct_user_credit(user_id)
+            
             return True, file_path, filename, None
         else:
             return False, None, None, "ดาวน์โหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"

@@ -1,48 +1,167 @@
 """
-app/telegram/auth.py - Telethon User Authentication Service (Vercel Writable FS Safe & Int32 Safe)
+app/telegram/auth.py - Telethon StringSession Authentication & User Quota/Credit Service with Admin Authorization
 """
 
 import os
+import json
 import asyncio
 import tempfile
 from pathlib import Path
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PhoneCodeExpiredError
 
 DEFAULT_API_ID = 32825705
 DEFAULT_API_HASH = "4023849266ed4dfcd584031ce6b2a5f4"
+DEFAULT_FREE_CREDITS = 5
+ADMIN_IDS = [8314575937]
 
 
-def get_sessions_dir() -> Path:
-    """Returns writable sessions directory (always uses /tmp on Vercel/Lambda)."""
+def is_admin(user_id: int) -> bool:
+    """Check if user_id is an authorized Admin."""
+    admin_id_str = os.getenv("ADMIN_ID", "8314575937").strip()
+    try:
+        admin_ids = [int(x.strip()) for x in admin_id_str.split(",") if x.strip().isdigit()]
+    except Exception:
+        admin_ids = [8314575937]
+    return user_id in admin_ids or user_id in ADMIN_IDS
+
+
+def get_storage_file() -> Path:
+    """Returns path to user_sessions.json."""
     if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
-        d = Path(tempfile.gettempdir()) / "telegram_sessions"
+        d = Path(tempfile.gettempdir()) / "telegram_downloader_data"
         d.mkdir(exist_ok=True)
-        return d
+        return d / "user_sessions.json"
 
     try:
         d = Path("sessions")
         d.mkdir(exist_ok=True)
-        test_file = d / ".write_test"
-        test_file.touch()
-        test_file.unlink(missing_ok=True)
-        return d
-    except (OSError, PermissionError):
-        d = Path(tempfile.gettempdir()) / "telegram_sessions"
+        return d / "user_sessions.json"
+    except Exception:
+        d = Path(tempfile.gettempdir()) / "telegram_downloader_data"
         d.mkdir(exist_ok=True)
-        return d
+        return d / "user_sessions.json"
 
 
-def get_user_session_path(user_id: int) -> str:
-    """Returns the file path for user's Telethon session (without .session extension)."""
-    sessions_dir = get_sessions_dir()
-    return str(sessions_dir / f"telegram_user_{user_id}")
+def load_user_sessions() -> dict:
+    """Load all saved user StringSessions and credits from file."""
+    filepath = get_storage_file()
+    if filepath.exists():
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
 
 
-def get_session_file(user_id: int) -> Path:
-    """Returns Path object for user's session file."""
-    sessions_dir = get_sessions_dir()
-    return sessions_dir / f"telegram_user_{user_id}.session"
+def get_user_data(user_id: int) -> dict:
+    """Get full user data dict including session and credits."""
+    sessions = load_user_sessions()
+    raw = sessions.get(str(user_id), {})
+    if isinstance(raw, str):
+        data = {"session": raw, "credits": DEFAULT_FREE_CREDITS, "download_count": 0}
+    elif isinstance(raw, dict):
+        data = raw
+        if "credits" not in data:
+            data["credits"] = DEFAULT_FREE_CREDITS
+        if "download_count" not in data:
+            data["download_count"] = 0
+    else:
+        data = {"session": "", "credits": DEFAULT_FREE_CREDITS, "download_count": 0}
+    return data
+
+
+def save_user_data(user_id: int, data: dict):
+    """Save user data dict."""
+    filepath = get_storage_file()
+    sessions = load_user_sessions()
+    sessions[str(user_id)] = data
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(sessions, f, indent=2)
+    except Exception:
+        pass
+
+
+def get_all_users_list() -> list:
+    """Get list of all registered users for Admin Dashboard."""
+    sessions = load_user_sessions()
+    result = []
+    for user_id_str, data in sessions.items():
+        try:
+            uid = int(user_id_str)
+        except ValueError:
+            continue
+        
+        if isinstance(data, str):
+            session_str = data
+            credits = DEFAULT_FREE_CREDITS
+            download_count = 0
+        elif isinstance(data, dict):
+            session_str = data.get("session", "")
+            credits = data.get("credits", DEFAULT_FREE_CREDITS)
+            download_count = data.get("download_count", 0)
+        else:
+            continue
+
+        result.append({
+            "user_id": uid,
+            "connected": bool(session_str),
+            "credits": credits,
+            "download_count": download_count,
+            "is_admin": is_admin(uid)
+        })
+    return result
+
+
+def save_user_session(user_id: int, session_str: str):
+    """Save user's StringSession to persistent JSON storage."""
+    data = get_user_data(user_id)
+    data["session"] = session_str
+    save_user_data(user_id, data)
+
+
+def delete_user_session(user_id: int):
+    """Remove user's StringSession."""
+    data = get_user_data(user_id)
+    data["session"] = ""
+    save_user_data(user_id, data)
+
+
+def get_user_session_string(user_id: int) -> str:
+    """Get saved session string for user."""
+    data = get_user_data(user_id)
+    return data.get("session", "")
+
+
+def get_user_credits(user_id: int) -> int:
+    """Get user's remaining download credits."""
+    data = get_user_data(user_id)
+    return data.get("credits", DEFAULT_FREE_CREDITS)
+
+
+def add_user_credits(user_id: int, amount: int) -> int:
+    """Add download credits to user."""
+    data = get_user_data(user_id)
+    current = data.get("credits", DEFAULT_FREE_CREDITS)
+    new_credits = current + amount
+    data["credits"] = new_credits
+    save_user_data(user_id, data)
+    return new_credits
+
+
+def deduct_user_credit(user_id: int) -> bool:
+    """Deduct 1 download credit from user."""
+    data = get_user_data(user_id)
+    current = data.get("credits", DEFAULT_FREE_CREDITS)
+    if current <= 0:
+        return False
+    data["credits"] = current - 1
+    data["download_count"] = data.get("download_count", 0) + 1
+    save_user_data(user_id, data)
+    return True
 
 
 def validate_api_credentials(api_id: int, api_hash: str):
@@ -63,24 +182,26 @@ def validate_api_credentials(api_id: int, api_hash: str):
 
 
 def is_user_logged_in(user_id: int) -> bool:
-    """Check if session file exists for user."""
-    session_file = get_session_file(user_id)
-    return session_file.exists() and session_file.stat().st_size > 0
+    """Check if session string exists for user."""
+    session_str = get_user_session_string(user_id)
+    return bool(session_str)
 
 
 async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
     """
     Check if the user session is active and valid.
-    Returns info dict: {"connected": True/False, "username": "...", "id": ...}
+    Returns info dict: {"connected": True/False, "username": "...", "id": ..., "credits": int, "is_admin": bool}
     """
+    data = get_user_data(user_id)
+    credits = data.get("credits", DEFAULT_FREE_CREDITS)
+    session_str = data.get("session", "")
+    admin_flag = is_admin(user_id)
+
+    if not session_str:
+        return {"connected": False, "credits": credits, "is_admin": admin_flag}
+
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
-
-    session_file = get_session_file(user_id)
-    if not session_file.exists():
-        return {"connected": False}
-
-    session_path = get_user_session_path(user_id)
-    client = TelegramClient(session_path, api_id_int, api_hash_clean)
+    client = TelegramClient(StringSession(session_str), api_id_int, api_hash_clean)
     try:
         await asyncio.wait_for(client.connect(), timeout=6.0)
         if await asyncio.wait_for(client.is_user_authorized(), timeout=6.0):
@@ -89,12 +210,15 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
             return {
                 "connected": True,
                 "username": username,
-                "id": me.id if me else user_id
+                "id": me.id if me else user_id,
+                "credits": credits,
+                "is_admin": admin_flag
             }
         else:
-            return {"connected": False}
+            delete_user_session(user_id)
+            return {"connected": False, "credits": credits, "is_admin": admin_flag}
     except Exception:
-        return {"connected": False}
+        return {"connected": True, "id": user_id, "username": f"ID: {user_id}", "credits": credits, "is_admin": admin_flag}
     finally:
         try:
             await client.disconnect()
@@ -110,11 +234,14 @@ async def send_otp(user_id: int, phone_number: str, api_id: int, api_hash: str):
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
     phone_clean = phone_number.strip().replace(" ", "").replace("-", "")
 
-    session_path = get_user_session_path(user_id)
-    client = TelegramClient(session_path, api_id_int, api_hash_clean)
+    client = TelegramClient(StringSession(), api_id_int, api_hash_clean)
     try:
         await asyncio.wait_for(client.connect(), timeout=8.0)
         res = await asyncio.wait_for(client.send_code_request(phone_clean), timeout=10.0)
+        
+        temp_session = client.session.save()
+        save_user_session(user_id, temp_session)
+
         return True, res.phone_code_hash, None
     except asyncio.TimeoutError:
         return False, None, "การเชื่อมต่อ Telegram หมดเวลา (Timeout) กรุณาลองใหม่อีกครั้ง"
@@ -134,17 +261,25 @@ async def verify_otp(user_id: int, phone_number: str, phone_code_hash: str, code
     """
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
     phone_clean = phone_number.strip().replace(" ", "").replace("-", "")
+    session_str = get_user_session_string(user_id)
 
-    session_path = get_user_session_path(user_id)
-    client = TelegramClient(session_path, api_id_int, api_hash_clean)
+    client = TelegramClient(StringSession(session_str), api_id_int, api_hash_clean)
     try:
         await asyncio.wait_for(client.connect(), timeout=8.0)
         try:
             await asyncio.wait_for(client.sign_in(phone=phone_clean, code=code, phone_code_hash=phone_code_hash), timeout=10.0)
+            
+            final_session = client.session.save()
+            save_user_session(user_id, final_session)
+
             me = await asyncio.wait_for(client.get_me(), timeout=6.0)
             username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
-            return "SUCCESS", {"username": username, "id": me.id}, None
+            credits = get_user_credits(user_id)
+            admin_flag = is_admin(user_id)
+            return "SUCCESS", {"username": username, "id": me.id, "credits": credits, "is_admin": admin_flag}, None
         except SessionPasswordNeededError:
+            temp_session = client.session.save()
+            save_user_session(user_id, temp_session)
             return "NEED_2FA", None, None
         except PhoneCodeInvalidError:
             return "INVALID_CODE", None, "รหัส OTP ไม่ถูกต้อง กรุณาตรวจสอบรหัสอีกครั้ง"
@@ -167,15 +302,21 @@ async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
     Returns: (success: bool, user_info: dict, error_msg: str)
     """
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
+    session_str = get_user_session_string(user_id)
 
-    session_path = get_user_session_path(user_id)
-    client = TelegramClient(session_path, api_id_int, api_hash_clean)
+    client = TelegramClient(StringSession(session_str), api_id_int, api_hash_clean)
     try:
         await asyncio.wait_for(client.connect(), timeout=8.0)
         await asyncio.wait_for(client.sign_in(password=password), timeout=10.0)
+        
+        final_session = client.session.save()
+        save_user_session(user_id, final_session)
+
         me = await asyncio.wait_for(client.get_me(), timeout=6.0)
         username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
-        return True, {"username": username, "id": me.id}, None
+        credits = get_user_credits(user_id)
+        admin_flag = is_admin(user_id)
+        return True, {"username": username, "id": me.id, "credits": credits, "is_admin": admin_flag}, None
     except asyncio.TimeoutError:
         return False, None, "การยืนยัน 2FA หมดเวลา (Timeout) กรุณาลองใหม่อีกครั้ง"
     except Exception as e:
@@ -188,13 +329,11 @@ async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
 
 
 async def logout_user(user_id: int, api_id: int, api_hash: str) -> bool:
-    """Log out and remove user's session file."""
-    api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
-
-    session_path = get_user_session_path(user_id)
-    session_file = get_session_file(user_id)
-    if session_file.exists():
-        client = TelegramClient(session_path, api_id_int, api_hash_clean)
+    """Log out and remove user's session string."""
+    session_str = get_user_session_string(user_id)
+    if session_str:
+        api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
+        client = TelegramClient(StringSession(session_str), api_id_int, api_hash_clean)
         try:
             await asyncio.wait_for(client.connect(), timeout=5.0)
             if await client.is_user_authorized():
@@ -207,10 +346,6 @@ async def logout_user(user_id: int, api_id: int, api_hash: str) -> bool:
             except Exception:
                 pass
 
-        try:
-            if session_file.exists():
-                os.remove(session_file)
-        except Exception:
-            pass
+        delete_user_session(user_id)
         return True
     return False

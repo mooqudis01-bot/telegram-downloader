@@ -1,8 +1,9 @@
 """
-app/telegram/auth.py - Telethon User Authentication Service (Vercel Read-Only FS Safe & Int32 Safe)
+app/telegram/auth.py - Telethon User Authentication Service (Vercel Timeout Safe & Int32 Safe)
 """
 
 import os
+import asyncio
 import tempfile
 from pathlib import Path
 from telethon import TelegramClient
@@ -73,9 +74,9 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
     session_path = get_user_session_path(user_id)
     client = TelegramClient(session_path, api_id_int, api_hash_clean)
     try:
-        await client.connect()
-        if await client.is_user_authorized():
-            me = await client.get_me()
+        await asyncio.wait_for(client.connect(), timeout=6.0)
+        if await asyncio.wait_for(client.is_user_authorized(), timeout=6.0):
+            me = await asyncio.wait_for(client.get_me(), timeout=6.0)
             username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
             return {
                 "connected": True,
@@ -87,7 +88,10 @@ async def check_user_session(user_id: int, api_id: int, api_hash: str) -> dict:
     except Exception:
         return {"connected": False}
     finally:
-        await client.disconnect()
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 async def send_otp(user_id: int, phone_number: str, api_id: int, api_hash: str):
@@ -96,19 +100,23 @@ async def send_otp(user_id: int, phone_number: str, api_id: int, api_hash: str):
     Returns: (success: bool, phone_code_hash: str, error_message: str)
     """
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
-
     phone_clean = phone_number.strip().replace(" ", "").replace("-", "")
 
     session_path = get_user_session_path(user_id)
     client = TelegramClient(session_path, api_id_int, api_hash_clean)
     try:
-        await client.connect()
-        res = await client.send_code_request(phone_clean)
+        await asyncio.wait_for(client.connect(), timeout=8.0)
+        res = await asyncio.wait_for(client.send_code_request(phone_clean), timeout=10.0)
         return True, res.phone_code_hash, None
+    except asyncio.TimeoutError:
+        return False, None, "การเชื่อมต่อ Telegram หมดเวลา (Timeout) กรุณาลองใหม่อีกครั้ง"
     except Exception as e:
         return False, None, str(e)
     finally:
-        await client.disconnect()
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 async def verify_otp(user_id: int, phone_number: str, phone_code_hash: str, code: str, api_id: int, api_hash: str):
@@ -117,16 +125,15 @@ async def verify_otp(user_id: int, phone_number: str, phone_code_hash: str, code
     Returns: (status: str ["SUCCESS", "NEED_2FA", "INVALID_CODE", "ERROR"], user_info: dict, error_msg: str)
     """
     api_id_int, api_hash_clean = validate_api_credentials(api_id, api_hash)
-
     phone_clean = phone_number.strip().replace(" ", "").replace("-", "")
 
     session_path = get_user_session_path(user_id)
     client = TelegramClient(session_path, api_id_int, api_hash_clean)
     try:
-        await client.connect()
+        await asyncio.wait_for(client.connect(), timeout=8.0)
         try:
-            await client.sign_in(phone=phone_clean, code=code, phone_code_hash=phone_code_hash)
-            me = await client.get_me()
+            await asyncio.wait_for(client.sign_in(phone=phone_clean, code=code, phone_code_hash=phone_code_hash), timeout=10.0)
+            me = await asyncio.wait_for(client.get_me(), timeout=6.0)
             username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
             return "SUCCESS", {"username": username, "id": me.id}, None
         except SessionPasswordNeededError:
@@ -135,10 +142,15 @@ async def verify_otp(user_id: int, phone_number: str, phone_code_hash: str, code
             return "INVALID_CODE", None, "รหัส OTP ไม่ถูกต้อง กรุณาตรวจสอบรหัสอีกครั้ง"
         except PhoneCodeExpiredError:
             return "ERROR", None, "รหัส OTP หมดอายุแล้ว กรุณาเริ่มใหม่อีกครั้ง"
+    except asyncio.TimeoutError:
+        return "ERROR", None, "การยืนยันรหัส OTP หมดเวลา (Timeout) กรุณาลองใหม่อีกครั้ง"
     except Exception as e:
         return "ERROR", None, str(e)
     finally:
-        await client.disconnect()
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
@@ -151,15 +163,20 @@ async def verify_2fa(user_id: int, password: str, api_id: int, api_hash: str):
     session_path = get_user_session_path(user_id)
     client = TelegramClient(session_path, api_id_int, api_hash_clean)
     try:
-        await client.connect()
-        await client.sign_in(password=password)
-        me = await client.get_me()
+        await asyncio.wait_for(client.connect(), timeout=8.0)
+        await asyncio.wait_for(client.sign_in(password=password), timeout=10.0)
+        me = await asyncio.wait_for(client.get_me(), timeout=6.0)
         username = f"@{me.username}" if me and me.username else (me.first_name if me else f"ID: {user_id}")
         return True, {"username": username, "id": me.id}, None
+    except asyncio.TimeoutError:
+        return False, None, "การยืนยัน 2FA หมดเวลา (Timeout) กรุณาลองใหม่อีกครั้ง"
     except Exception as e:
         return False, None, str(e)
     finally:
-        await client.disconnect()
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 async def logout_user(user_id: int, api_id: int, api_hash: str) -> bool:
@@ -171,13 +188,16 @@ async def logout_user(user_id: int, api_id: int, api_hash: str) -> bool:
     if session_file.exists():
         client = TelegramClient(session_path, api_id_int, api_hash_clean)
         try:
-            await client.connect()
+            await asyncio.wait_for(client.connect(), timeout=5.0)
             if await client.is_user_authorized():
                 await client.log_out()
         except Exception:
             pass
         finally:
-            await client.disconnect()
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
         try:
             if session_file.exists():

@@ -514,18 +514,20 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: parseInt(userId), phone: phone })
                 });
-                const data = await res.json();
+                const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
                 setLoading(1, false);
+
                 if (res.ok && data.success) {
                     phoneCodeHash = data.phone_code_hash;
                     showAlert('ส่งรหัส OTP เรียบร้อยแล้ว กรุณาเช็คแชท Telegram', false);
                     showAuthStep(2);
                 } else {
-                    showAlert(data.detail || 'ไม่สามารถส่ง OTP ได้');
+                    const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                    showAlert('ส่ง OTP ไม่สำเร็จ: ' + errDetail);
                 }
             } catch (e) {
                 setLoading(1, false);
-                showAlert('เกิดข้อผิดพลาดในการส่ง OTP');
+                showAlert('เกิดข้อผิดพลาดในการเชื่อมต่อ: ' + (e.message || e));
             }
         }
 
@@ -546,7 +548,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
                         code: code
                     })
                 });
-                const data = await res.json();
+                const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
                 setLoading(2, false);
                 if (res.ok) {
                     if (data.need_2fa) {
@@ -557,11 +559,12 @@ MINIAPP_HTML = """<!DOCTYPE html>
                         checkLoginStatus(currentUserId);
                     }
                 } else {
-                    showAlert(data.detail || 'รหัส OTP ไม่ถูกต้อง');
+                    const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                    showAlert('ยืนยัน OTP ไม่สำเร็จ: ' + errDetail);
                 }
             } catch (e) {
                 setLoading(2, false);
-                showAlert('เกิดข้อผิดพลาดในการตรวจสอบ OTP');
+                showAlert('เกิดข้อผิดพลาดในการตรวจสอบ OTP: ' + (e.message || e));
             }
         }
 
@@ -577,17 +580,18 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: parseInt(currentUserId), password: pwd })
                 });
-                const data = await res.json();
+                const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
                 setLoading(3, false);
                 if (res.ok && data.success) {
                     showAlert('Login 2FA สำเร็จเรียบร้อยแล้ว!', false);
                     checkLoginStatus(currentUserId);
                 } else {
-                    showAlert(data.detail || 'รหัสผ่าน 2FA ไม่ถูกต้อง');
+                    const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                    showAlert('ยืนยัน 2FA ไม่สำเร็จ: ' + errDetail);
                 }
             } catch (e) {
                 setLoading(3, false);
-                showAlert('เกิดข้อผิดพลาดในการตรวจสอบ 2FA');
+                showAlert('เกิดข้อผิดพลาดในการตรวจสอบ 2FA: ' + (e.message || e));
             }
         }
 
@@ -619,13 +623,14 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: parseInt(currentUserId || 0), link: link })
                 });
-                const data = await res.json();
+                const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
                 setLoading('dl', false);
                 if (res.ok && data.success) {
                     showAlert('ดาวน์โหลดสำเร็จ! เพิ่มรายการเข้าคิวแล้ว', false);
                     document.getElementById('link-input').value = '';
                 } else {
-                    showAlert(data.detail || 'เกิดข้อผิดพลาดในการส่งลิงก์ดาวน์โหลด');
+                    const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                    showAlert('ดาวน์โหลดไม่สำเร็จ: ' + errDetail);
                 }
             } catch (e) {
                 setLoading('dl', false);

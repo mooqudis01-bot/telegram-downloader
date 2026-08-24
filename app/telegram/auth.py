@@ -1,5 +1,5 @@
 """
-app/telegram/auth.py - Telethon User Authentication Service (Vercel Timeout Safe & Int32 Safe)
+app/telegram/auth.py - Telethon User Authentication Service (Vercel Writable FS Safe & Int32 Safe)
 """
 
 import os
@@ -14,10 +14,18 @@ DEFAULT_API_HASH = "4023849266ed4dfcd584031ce6b2a5f4"
 
 
 def get_sessions_dir() -> Path:
-    """Returns writable sessions directory (falls back to /tmp for Vercel/Lambda)."""
+    """Returns writable sessions directory (always uses /tmp on Vercel/Lambda)."""
+    if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+        d = Path(tempfile.gettempdir()) / "telegram_sessions"
+        d.mkdir(exist_ok=True)
+        return d
+
     try:
         d = Path("sessions")
         d.mkdir(exist_ok=True)
+        test_file = d / ".write_test"
+        test_file.touch()
+        test_file.unlink(missing_ok=True)
         return d
     except (OSError, PermissionError):
         d = Path(tempfile.gettempdir()) / "telegram_sessions"

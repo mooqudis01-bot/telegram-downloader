@@ -1,6 +1,6 @@
 """
 app/web/server.py - Telegram MiniApp & FastAPI Web Application
-Telegram Downloader MiniApp UI, REST API, TrueMoney Angpao Topup & Webhook Service
+Telegram Downloader MiniApp UI, REST API, TrueMoney Angpao Topup & Webhook Service (Mobile Banking App Onboarding Flow)
 """
 
 import os
@@ -321,30 +321,29 @@ MINIAPP_HTML = """<!DOCTYPE html>
     <title>Telegram Downloader</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root {
             --tg-bg: #0e1621;
             --tg-card: #17212b;
-            --tg-card-hover: #202b36;
             --tg-input: #242f3d;
             --tg-blue: #3390ec;
             --tg-blue-hover: #2b82d9;
             --tg-text: #ffffff;
             --tg-subtext: #7f91a4;
-            --tg-border: rgba(255, 255, 255, 0.07);
+            --tg-border: rgba(255, 255, 255, 0.08);
             --tg-green: #40b76e;
             --tg-red: #e53935;
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-tap-highlight-color: transparent; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; -webkit-tap-highlight-color: transparent; }
 
         body {
             background-color: var(--tg-bg);
             color: var(--tg-text);
             min-height: 100vh;
-            padding: 16px 12px 32px 12px;
+            padding: 16px 14px 32px 14px;
             display: flex;
             flex-direction: column;
         }
@@ -408,7 +407,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
             font-weight: 600;
         }
 
-        /* Segmented Nav Bar */
+        /* Nav Segmented Control */
         .nav-segmented {
             background: var(--tg-card);
             border: 1px solid var(--tg-border);
@@ -437,32 +436,48 @@ MINIAPP_HTML = """<!DOCTYPE html>
             color: white;
         }
 
-        /* Card Sections */
+        /* Main Section Card */
         .section-card {
             background: var(--tg-card);
             border: 1px solid var(--tg-border);
-            border-radius: 16px;
-            padding: 20px;
+            border-radius: 18px;
+            padding: 24px 20px;
             margin-bottom: 16px;
+            position: relative;
         }
 
-        .section-title {
-            font-size: 16px;
-            font-weight: 600;
+        /* Mobile Banking Onboarding UI Flow */
+        .app-hero-icon {
+            width: 56px;
+            height: 56px;
+            background: rgba(51, 144, 236, 0.12);
+            border: 1px solid rgba(51, 144, 236, 0.3);
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 26px;
+            margin: 0 auto 16px auto;
+        }
+
+        .step-title {
+            font-size: 19px;
+            font-weight: 700;
             color: var(--tg-text);
-            margin-bottom: 4px;
+            text-align: center;
+            margin-bottom: 6px;
         }
 
-        .section-desc {
+        .step-desc {
             font-size: 13px;
             color: var(--tg-subtext);
-            margin-bottom: 18px;
-            line-height: 1.4;
+            text-align: center;
+            margin-bottom: 22px;
+            line-height: 1.5;
         }
 
-        /* Inputs & Labels */
         .form-group {
-            margin-bottom: 16px;
+            margin-bottom: 18px;
         }
 
         .form-label {
@@ -470,19 +485,20 @@ MINIAPP_HTML = """<!DOCTYPE html>
             font-size: 12px;
             font-weight: 600;
             color: var(--tg-subtext);
-            margin-bottom: 6px;
+            margin-bottom: 8px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
 
-        input {
+        input[type="text"], input[type="password"], input[type="number"] {
             width: 100%;
-            padding: 12px 14px;
+            padding: 14px 16px;
             background: var(--tg-input);
-            border: 1px solid var(--tg-border);
-            border-radius: 10px;
+            border: 1.5px solid var(--tg-border);
+            border-radius: 12px;
             color: white;
-            font-size: 14px;
+            font-size: 15px;
+            font-weight: 500;
             outline: none;
             transition: border-color 0.2s ease;
         }
@@ -491,22 +507,44 @@ MINIAPP_HTML = """<!DOCTYPE html>
             border-color: var(--tg-blue);
         }
 
-        input::placeholder {
-            color: #536374;
+        /* Banking 5-Digit OTP Segmented Boxes */
+        .otp-container {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .otp-box {
+            width: 48px !important;
+            height: 56px;
+            font-size: 24px !important;
+            font-weight: 800 !important;
+            text-align: center;
+            border-radius: 14px !important;
+            border: 1.5px solid var(--tg-border) !important;
+            background: var(--tg-input) !important;
+            color: var(--tg-blue) !important;
+            padding: 0 !important;
+        }
+
+        .otp-box:focus {
+            border-color: var(--tg-blue) !important;
+            box-shadow: 0 0 12px rgba(51, 144, 236, 0.3);
         }
 
         /* Buttons */
         .btn-primary {
             width: 100%;
-            padding: 13px;
+            padding: 14px;
             background: var(--tg-blue);
             border: none;
-            border-radius: 10px;
+            border-radius: 12px;
             color: white;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: 600;
             cursor: pointer;
-            transition: background 0.2s ease;
+            transition: background 0.2s ease, transform 0.1s ease;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -518,13 +556,14 @@ MINIAPP_HTML = """<!DOCTYPE html>
         }
 
         .btn-primary:active {
-            opacity: 0.9;
+            transform: scale(0.98);
         }
 
         .btn-secondary {
-            background: rgba(255, 255, 255, 0.08);
-            color: var(--tg-text);
-            margin-top: 8px;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--tg-subtext);
+            margin-top: 10px;
+            border: 1px solid var(--tg-border);
         }
 
         .btn-danger {
@@ -540,22 +579,21 @@ MINIAPP_HTML = """<!DOCTYPE html>
             width: auto;
         }
 
-        /* Instruction Box */
+        /* Info & Alert */
         .info-box {
             background: rgba(51, 144, 236, 0.08);
             border: 1px solid rgba(51, 144, 236, 0.2);
-            border-radius: 10px;
+            border-radius: 12px;
             padding: 14px;
-            margin-bottom: 16px;
+            margin-bottom: 18px;
             font-size: 12px;
             color: #b0c4de;
-            line-height: 1.5;
+            line-height: 1.6;
         }
 
-        /* Alert */
         .alert-bar {
             padding: 12px 14px;
-            border-radius: 10px;
+            border-radius: 12px;
             font-size: 13px;
             font-weight: 500;
             margin-bottom: 14px;
@@ -574,14 +612,14 @@ MINIAPP_HTML = """<!DOCTYPE html>
             color: #81c784;
         }
 
-        /* User & File List Items */
+        /* Item Row */
         .item-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
             background: var(--tg-input);
             border: 1px solid var(--tg-border);
-            border-radius: 10px;
+            border-radius: 12px;
             padding: 12px 14px;
             margin-bottom: 8px;
         }
@@ -600,6 +638,11 @@ MINIAPP_HTML = """<!DOCTYPE html>
 
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        
+        .step-box { display: none; }
+        .step-box.active { display: block; animation: fadeIn 0.25s ease; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
         .spinner {
             width: 16px; height: 16px;
@@ -640,13 +683,15 @@ MINIAPP_HTML = """<!DOCTYPE html>
 
         <div id="alert-box" class="alert-bar"></div>
 
-        <!-- TAB 1: ACCOUNT -->
+        <!-- TAB 1: ACCOUNT (MOBILE BANKING ONBOARDING FLOW) -->
         <div id="tab-auth" class="tab-content active">
             <div class="section-card">
-                <!-- Step 1: Phone -->
+                <!-- Step 1: Mobile Phone Entry -->
                 <div id="auth-step-1" class="step-box active">
-                    <h2 class="section-title">เข้าสู่ระบบ Telegram Account</h2>
-                    <p class="section-desc">เชื่อมต่อบัญชี Telegram เพื่อใช้ดาวน์โหลดรูปภาพและวิดีโอ</p>
+                    <div class="app-hero-icon">📱</div>
+                    <h2 class="step-title">เข้าสู่ระบบ Telegram Account</h2>
+                    <p class="step-desc">กรอกเบอร์โทรศัพท์ของคุณเพื่อรับรหัส OTP ยืนยันตัวตน</p>
+                    
                     <div class="form-group">
                         <label class="form-label">Telegram User ID</label>
                         <input type="text" id="user-id-input" placeholder="กำลังโหลด ID...">
@@ -657,32 +702,40 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     </div>
                     <button class="btn-primary" onclick="handleSendOtp()">
                         <span class="spinner" id="sp-1"></span>
-                        <span>ส่งรหัส OTP</span>
+                        <span>ถัดไป ➔</span>
                     </button>
                 </div>
 
-                <!-- Step 2: OTP -->
+                <!-- Step 2: Banking 5-Digit OTP Verification Screen -->
                 <div id="auth-step-2" class="step-box">
-                    <h2 class="section-title">ยืนยันรหัส OTP</h2>
-                    <p class="section-desc">กรอกรหัส OTP ที่ส่งไปยังแชท Telegram ของคุณ</p>
-                    <div class="form-group">
-                        <label class="form-label">รหัส OTP</label>
-                        <input type="text" id="otp-input" placeholder="เช่น 12345">
+                    <div class="app-hero-icon" style="background: rgba(64,183,110,0.12); border-color: rgba(64,183,110,0.3);">📲</div>
+                    <h2 class="step-title">ยืนยันรหัส OTP</h2>
+                    <p class="step-desc">กรอกรหัส OTP 5 หลักที่ส่งไปยังแชท Telegram ของคุณ<br><span id="otp-phone-display" style="color: var(--tg-blue); font-weight: 600;">+66812345678</span></p>
+
+                    <!-- Banking 5-Box Segmented OTP Inputs -->
+                    <div class="otp-container">
+                        <input type="number" maxlength="1" class="otp-box" id="otp-1" onkeyup="moveOtpFocus(1, event)" pattern="[0-9]*" inputmode="numeric">
+                        <input type="number" maxlength="1" class="otp-box" id="otp-2" onkeyup="moveOtpFocus(2, event)" pattern="[0-9]*" inputmode="numeric">
+                        <input type="number" maxlength="1" class="otp-box" id="otp-3" onkeyup="moveOtpFocus(3, event)" pattern="[0-9]*" inputmode="numeric">
+                        <input type="number" maxlength="1" class="otp-box" id="otp-4" onkeyup="moveOtpFocus(4, event)" pattern="[0-9]*" inputmode="numeric">
+                        <input type="number" maxlength="1" class="otp-box" id="otp-5" onkeyup="moveOtpFocus(5, event)" pattern="[0-9]*" inputmode="numeric">
                     </div>
-                    <button class="btn-primary" onclick="handleVerifyOtp()">
+
+                    <button class="btn-primary" onclick="triggerOtpSubmit()">
                         <span class="spinner" id="sp-2"></span>
-                        <span>ยืนยันรหัส OTP</span>
+                        <span>ยืนยันตัวตน</span>
                     </button>
-                    <button class="btn-primary btn-secondary" onclick="showAuthStep(1)">ยกเลิก</button>
+                    <button class="btn-primary btn-secondary" onclick="showAuthStep(1)">← เปลี่ยนเบอร์โทรศัพท์</button>
                 </div>
 
-                <!-- Step 3: 2FA -->
+                <!-- Step 3: 2FA Screen -->
                 <div id="auth-step-3" class="step-box">
-                    <h2 class="section-title">Two-Step Verification</h2>
-                    <p class="section-desc">กรอกรหัสผ่าน 2FA ของบัญชี Telegram</p>
+                    <div class="app-hero-icon" style="background: rgba(229,57,53,0.12); border-color: rgba(229,57,53,0.3);">🔐</div>
+                    <h2 class="step-title">Two-Step Verification</h2>
+                    <p class="step-desc">บัญชีของคุณมีการเปิดใช้งาน 2FA กรุณากรอกรหัสผ่านเพื่อเข้าสู่ระบบ</p>
                     <div class="form-group">
                         <label class="form-label">รหัสผ่าน 2FA</label>
-                        <input type="password" id="pwd-input" placeholder="กรอกรหัสผ่าน">
+                        <input type="password" id="pwd-input" placeholder="กรอกรหัสผ่าน 2FA">
                     </div>
                     <button class="btn-primary" onclick="handleVerify2FA()">
                         <span class="spinner" id="sp-3"></span>
@@ -691,14 +744,14 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     <button class="btn-primary btn-secondary" onclick="showAuthStep(1)">ยกเลิก</button>
                 </div>
 
-                <!-- Step 4: Dashboard -->
+                <!-- Step 4: Account Connected Dashboard -->
                 <div id="auth-step-4" class="step-box">
                     <div style="text-align: center; padding: 10px 0 16px 0;">
-                        <div class="avatar" style="width: 56px; height: 56px; margin: 0 auto 10px auto; font-size: 20px;" id="dash-avatar">TG</div>
-                        <div style="font-size: 16px; font-weight: 600; color: white;" id="dash-name">@username</div>
-                        <div style="font-size: 12px; color: var(--tg-subtext); margin-top: 2px;" id="dash-id">ID: 000000</div>
-                        <div style="margin-top: 10px; display: inline-block; padding: 4px 10px; background: rgba(64,183,110,0.15); border: 1px solid rgba(64,183,110,0.3); border-radius: 20px; font-size: 12px; font-weight: 500; color: var(--tg-green);">
-                            🟢 เชื่อมต่อบัญชีสำเร็จแล้ว
+                        <div class="avatar" style="width: 60px; height: 60px; margin: 0 auto 12px auto; font-size: 22px;" id="dash-avatar">TG</div>
+                        <div style="font-size: 18px; font-weight: 700; color: white;" id="dash-name">@username</div>
+                        <div style="font-size: 12px; color: var(--tg-subtext); margin-top: 3px;" id="dash-id">ID: 000000</div>
+                        <div style="margin-top: 14px; display: inline-block; padding: 6px 14px; background: rgba(64,183,110,0.15); border: 1px solid rgba(64,183,110,0.3); border-radius: 20px; font-size: 12px; font-weight: 600; color: var(--tg-green);">
+                            🟢 เชื่อมต่อบัญชีสำเร็จพร้อมใช้งาน
                         </div>
                     </div>
                     <button class="btn-primary btn-danger" onclick="handleLogout()">
@@ -712,8 +765,8 @@ MINIAPP_HTML = """<!DOCTYPE html>
         <!-- TAB 2: DOWNLOADER -->
         <div id="tab-download" class="tab-content">
             <div class="section-card">
-                <h2 class="section-title">ดาวน์โหลด Telegram Media</h2>
-                <p class="section-desc">วางลิงก์ข้อความ Telegram เพื่อเริ่มดาวน์โหลดไฟล์</p>
+                <h2 class="step-title" style="text-align: left; font-size: 17px;">ดาวน์โหลด Telegram Media</h2>
+                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">วางลิงก์ข้อความ Telegram เพื่อเริ่มดาวน์โหลดไฟล์สื่อ</p>
                 <div class="form-group">
                     <label class="form-label">Telegram Message Link</label>
                     <input type="text" id="link-input" placeholder="https://t.me/c/123456789/100">
@@ -728,8 +781,8 @@ MINIAPP_HTML = """<!DOCTYPE html>
         <!-- TAB 3: TOPUP -->
         <div id="tab-topup" class="tab-content">
             <div class="section-card">
-                <h2 class="section-title">เติมโควตาดาวน์โหลด (TrueMoney)</h2>
-                <p class="section-desc">เติมโควตาอัตโนมัติ 24 ชม. ผ่านซองอั่งเปา TrueMoney Wallet (1 บาท = 1 โควตา)</p>
+                <h2 class="step-title" style="text-align: left; font-size: 17px;">เติมโควตาดาวน์โหลด (TrueMoney)</h2>
+                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">เติมโควตาอัตโนมัติ 24 ชม. ผ่านซองอั่งเปา TrueMoney (1 บาท = 1 โควตา)</p>
                 
                 <div class="info-box">
                     📌 <b>วิธีสร้างซองอั่งเปา:</b> เปิดแอป TrueMoney Wallet ➔ เลือก <b>ส่งซองอั่งเปา</b> ➔ ใส่ยอดเงิน ➔ กำหนดจำนวนคนรับ = <b>1 คน</b> ➔ คัดลอกลิงก์มาวางด้านล่าง
@@ -749,8 +802,8 @@ MINIAPP_HTML = """<!DOCTYPE html>
         <!-- TAB 4: FILES -->
         <div id="tab-files" class="tab-content">
             <div class="section-card">
-                <h2 class="section-title">รายการไฟล์ที่ดาวน์โหลด</h2>
-                <p class="section-desc">ไฟล์ทั้งหมดที่ดาวน์โหลดสำเร็จในระบบ</p>
+                <h2 class="step-title" style="text-align: left; font-size: 17px;">รายการไฟล์ที่ดาวน์โหลด</h2>
+                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">ไฟล์ทั้งหมดที่ดาวน์โหลดสำเร็จในระบบ</p>
                 <div id="files-list">
                     <p style="font-size: 13px; color: var(--tg-subtext); text-align: center;">กำลังโหลดรายการไฟล์...</p>
                 </div>
@@ -760,8 +813,8 @@ MINIAPP_HTML = """<!DOCTYPE html>
         <!-- TAB 5: ADMIN -->
         <div id="tab-admin" class="tab-content">
             <div class="section-card">
-                <h2 class="section-title">Admin Control Panel</h2>
-                <p class="section-desc">จัดการโควตาดาวน์โหลดให้ผู้ใช้ในระบบ</p>
+                <h2 class="step-title" style="text-align: left; font-size: 17px;">Admin Control Panel</h2>
+                <p class="step-desc" style="text-align: left; font-size: 13px; margin-bottom: 16px;">จัดการโควตาดาวน์โหลดให้ผู้ใช้ในระบบ</p>
                 
                 <div style="background: var(--tg-input); padding: 14px; border-radius: 12px; margin-bottom: 16px; border: 1px solid var(--tg-border);">
                     <div style="font-size: 13px; font-weight: 600; color: white; margin-bottom: 10px;">➕ เติมโควตาให้ผู้ใช้</div>
@@ -837,6 +890,31 @@ MINIAPP_HTML = """<!DOCTYPE html>
             if (sp) sp.style.display = isLoading ? 'inline-block' : 'none';
         }
 
+        function moveOtpFocus(index, event) {
+            if (event.key === 'Backspace' && index > 1 && !document.getElementById('otp-' + index).value) {
+                document.getElementById('otp-' + (index - 1)).focus();
+                return;
+            }
+            const val = document.getElementById('otp-' + index).value;
+            if (val && index < 5) {
+                document.getElementById('otp-' + (index + 1)).focus();
+            }
+            
+            const fullCode = [1,2,3,4,5].map(i => document.getElementById('otp-' + i).value).join('');
+            if (fullCode.length === 5) {
+                handleVerifyOtp(fullCode);
+            }
+        }
+
+        function triggerOtpSubmit() {
+            const fullCode = [1,2,3,4,5].map(i => document.getElementById('otp-' + i).value).join('');
+            if (fullCode.length < 5) {
+                showAlert('กรุณากรอกรหัส OTP ให้ครบ 5 หลัก');
+                return;
+            }
+            handleVerifyOtp(fullCode);
+        }
+
         async function checkLoginStatus(userId) {
             if (!userId) return;
             try {
@@ -861,102 +939,6 @@ MINIAPP_HTML = """<!DOCTYPE html>
             } catch (e) {}
         }
 
-        async function handleTrueMoneyTopup() {
-            const link = document.getElementById('angpao-link-input').value.trim();
-            if (!link) { showAlert('กรุณาระบุลิงก์ซองอั่งเปา TrueMoney Wallet'); return; }
-            hideAlert();
-            setLoading('tp', true);
-
-            try {
-                const res = await fetch('/api/topup/truemoney', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_id: parseInt(currentUserId || 0),
-                        link: link
-                    })
-                });
-                const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
-                setLoading('tp', false);
-                if (res.ok && data.success) {
-                    showAlert(data.message, false);
-                    document.getElementById('angpao-link-input').value = '';
-                    checkLoginStatus(currentUserId);
-                } else {
-                    const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
-                    showAlert('เติมซองอั่งเปาไม่สำเร็จ: ' + errDetail);
-                }
-            } catch (e) {
-                setLoading('tp', false);
-                showAlert('เกิดข้อผิดพลาดในการรับซองอั่งเปา');
-            }
-        }
-
-        async function handleAdminAddCredits() {
-            const targetId = document.getElementById('admin-target-id').value.trim();
-            const amount = document.getElementById('admin-amount').value.trim();
-
-            if (!targetId || !amount) {
-                showAlert('กรุณาระบุ Telegram User ID และ จำนวนโควตา');
-                return;
-            }
-
-            hideAlert();
-            try {
-                const res = await fetch('/api/admin/add-credits', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        admin_id: parseInt(currentUserId),
-                        target_user_id: parseInt(targetId),
-                        amount: parseInt(amount)
-                    })
-                });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    showAlert(data.message, false);
-                    document.getElementById('admin-target-id').value = '';
-                    document.getElementById('admin-amount').value = '';
-                    loadAdminUsers();
-                } else {
-                    showAlert(data.detail || 'ไม่สามารถเติมเครดิตได้');
-                }
-            } catch (e) {
-                showAlert('เกิดข้อผิดพลาดในการเติมเครดิต');
-            }
-        }
-
-        async function loadAdminUsers() {
-            const listEl = document.getElementById('admin-users-list');
-            try {
-                const res = await fetch('/api/admin/users?admin_id=' + currentUserId);
-                const data = await res.json();
-                if (res.ok && data.users) {
-                    listEl.innerHTML = data.users.map(u => `
-                        <div class="item-row">
-                            <div>
-                                <div class="item-name">👤 ${u.username || ('ID: ' + u.user_id)} ${u.is_admin ? '👑' : ''}</div>
-                                <div class="item-sub">ID: <code>${u.user_id}</code> | โหลดแล้ว: ${u.download_count} ครั้ง</div>
-                            </div>
-                            <div style="text-align:right;">
-                                <div style="color:var(--tg-blue); font-weight:600; font-size:12px;">🎟️ ${u.credits} ครั้ง</div>
-                                <button class="btn-primary btn-sm" onclick="quickFillTarget('${u.user_id}')" style="margin-top:4px; padding:4px 8px; font-size:11px;">➕ เติมโควตา</button>
-                            </div>
-                        </div>
-                    `).join('');
-                } else {
-                    listEl.innerHTML = '<p style="font-size: 13px; color: var(--tg-red); text-align: center;">คุณไม่มีสิทธิ์เข้าถึง Admin Panel</p>';
-                }
-            } catch (e) {
-                listEl.innerHTML = '<p style="font-size: 13px; color: var(--tg-red); text-align: center;">เกิดข้อผิดพลาดในการโหลดข้อมูล</p>';
-            }
-        }
-
-        function quickFillTarget(uid) {
-            document.getElementById('admin-target-id').value = uid;
-            document.getElementById('admin-amount').focus();
-        }
-
         async function handleSendOtp() {
             const userId = document.getElementById('user-id-input').value.trim();
             const rawPhone = document.getElementById('phone-input').value.trim();
@@ -966,6 +948,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
 
             currentUserId = userId;
             currentPhone = phone;
+            document.getElementById('otp-phone-display').innerText = phone;
             hideAlert();
             setLoading(1, true);
 
@@ -991,6 +974,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
                     phoneCodeHash = data.phone_code_hash;
                     showAlert('ส่งรหัส OTP เรียบร้อยแล้ว กรุณาเช็คแชท Telegram', false);
                     showAuthStep(2);
+                    setTimeout(() => { document.getElementById('otp-1').focus(); }, 300);
                 } else {
                     const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
                     showAlert('ส่ง OTP ไม่สำเร็จ: ' + errDetail);
@@ -1001,9 +985,9 @@ MINIAPP_HTML = """<!DOCTYPE html>
             }
         }
 
-        async function handleVerifyOtp() {
-            const code = document.getElementById('otp-input').value.trim();
-            if (!code) { showAlert('กรุณากรอกรหัส OTP'); return; }
+        async function handleVerifyOtp(codeToVerify) {
+            const code = codeToVerify || [1,2,3,4,5].map(i => document.getElementById('otp-' + i).value).join('');
+            if (!code || code.length < 5) { showAlert('กรุณากรอกรหัส OTP ให้ครบ 5 หลัก'); return; }
             hideAlert();
             setLoading(2, true);
 
@@ -1107,6 +1091,102 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 setLoading('dl', false);
                 showAlert('เกิดข้อผิดพลาดในการส่งคำขอดาวน์โหลด');
             }
+        }
+
+        async function handleTrueMoneyTopup() {
+            const link = document.getElementById('angpao-link-input').value.trim();
+            if (!link) { showAlert('กรุณาระบุลิงก์ซองอั่งเปา TrueMoney Wallet'); return; }
+            hideAlert();
+            setLoading('tp', true);
+
+            try {
+                const res = await fetch('/api/topup/truemoney', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: parseInt(currentUserId || 0),
+                        link: link
+                    })
+                });
+                const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
+                setLoading('tp', false);
+                if (res.ok && data.success) {
+                    showAlert(data.message, false);
+                    document.getElementById('angpao-link-input').value = '';
+                    checkLoginStatus(currentUserId);
+                } else {
+                    const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                    showAlert('เติมซองอั่งเปาไม่สำเร็จ: ' + errDetail);
+                }
+            } catch (e) {
+                setLoading('tp', false);
+                showAlert('เกิดข้อผิดพลาดในการรับซองอั่งเปา');
+            }
+        }
+
+        async function handleAdminAddCredits() {
+            const targetId = document.getElementById('admin-target-id').value.trim();
+            const amount = document.getElementById('admin-amount').value.trim();
+
+            if (!targetId || !amount) {
+                showAlert('กรุณาระบุ Telegram User ID และ จำนวนโควตา');
+                return;
+            }
+
+            hideAlert();
+            try {
+                const res = await fetch('/api/admin/add-credits', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        admin_id: parseInt(currentUserId),
+                        target_user_id: parseInt(targetId),
+                        amount: parseInt(amount)
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showAlert(data.message, false);
+                    document.getElementById('admin-target-id').value = '';
+                    document.getElementById('admin-amount').value = '';
+                    loadAdminUsers();
+                } else {
+                    showAlert(data.detail || 'ไม่สามารถเติมเครดิตได้');
+                }
+            } catch (e) {
+                showAlert('เกิดข้อผิดพลาดในการเติมเครดิต');
+            }
+        }
+
+        async function loadAdminUsers() {
+            const listEl = document.getElementById('admin-users-list');
+            try {
+                const res = await fetch('/api/admin/users?admin_id=' + currentUserId);
+                const data = await res.json();
+                if (res.ok && data.users) {
+                    listEl.innerHTML = data.users.map(u => `
+                        <div class="item-row">
+                            <div>
+                                <div class="item-name">👤 ${u.username || ('ID: ' + u.user_id)} ${u.is_admin ? '👑' : ''}</div>
+                                <div class="item-sub">ID: <code>${u.user_id}</code> | โหลดแล้ว: ${u.download_count} ครั้ง</div>
+                            </div>
+                            <div style="text-align:right;">
+                                <div style="color:var(--tg-blue); font-weight:600; font-size:12px;">🎟️ ${u.credits} ครั้ง</div>
+                                <button class="btn-primary btn-sm" onclick="quickFillTarget('${u.user_id}')" style="margin-top:4px; padding:4px 8px; font-size:11px;">➕ เติมโควตา</button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    listEl.innerHTML = '<p style="font-size: 13px; color: var(--tg-red); text-align: center;">คุณไม่มีสิทธิ์เข้าถึง Admin Panel</p>';
+                }
+            } catch (e) {
+                listEl.innerHTML = '<p style="font-size: 13px; color: var(--tg-red); text-align: center;">เกิดข้อผิดพลาดในการโหลดข้อมูล</p>';
+            }
+        }
+
+        function quickFillTarget(uid) {
+            document.getElementById('admin-target-id').value = uid;
+            document.getElementById('admin-amount').focus();
         }
 
         async function loadFiles() {

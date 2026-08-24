@@ -4,3 +4,5 @@ aiogram>=3.0.0
 telethon
 python-dotenv
 pydantic
+httpx
+aiohttp

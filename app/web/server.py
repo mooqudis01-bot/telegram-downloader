@@ -18,6 +18,7 @@ from app.telegram.auth import (
     verify_2fa,
     logout_user
 )
+from app.telegram.media import download_media_from_link
 
 app = FastAPI(
     title="Telegram Downloader MiniApp",
@@ -162,12 +163,20 @@ async def api_logout(req: LogoutRequest):
 async def create_download(req: DownloadRequest):
     if not req.link:
         raise HTTPException(status_code=400, detail="กรุณาระบุลิงก์ข้อความ Telegram")
-    return {
-        "success": True,
-        "message": "เพิ่มรายการดาวน์โหลดเข้าคิวแล้ว",
-        "link": req.link,
-        "status": "queued"
-    }
+
+    api_id, api_hash = get_api_credentials()
+    success, file_path, filename, error_msg = await download_media_from_link(req.user_id, req.link, api_id, api_hash)
+
+    if success:
+        return {
+            "success": True,
+            "message": f"ดาวน์โหลดสำเร็จ! ไฟล์: {filename}",
+            "filename": filename,
+            "link": req.link,
+            "status": "completed"
+        }
+    else:
+        raise HTTPException(status_code=400, detail=error_msg or "ดาวน์โหลดไม่สำเร็จ")
 
 
 @app.get("/api/downloads")
@@ -652,7 +661,7 @@ MINIAPP_HTML = """<!DOCTYPE html>
                 const data = await res.json().catch(() => ({ detail: 'JSON Parse Error' }));
                 setLoading('dl', false);
                 if (res.ok && data.success) {
-                    showAlert('ดาวน์โหลดสำเร็จ! เพิ่มรายการเข้าคิวแล้ว', false);
+                    showAlert('ดาวน์โหลดสำเร็จ! ไฟล์: ' + (data.filename || ''), false);
                     document.getElementById('link-input').value = '';
                 } else {
                     const errDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
